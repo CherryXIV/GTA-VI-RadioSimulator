@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="RadioSim.Gui/RadioSim.Gui.csproj" />
+  <Project Path="RadioSim/RadioSim.csproj" />
+</Solution>

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>GTA VI Radio Simulator</AssemblyName>
+    <!-- the program icon (icon.ico at the repository root): exe icon, and embedded for the window -->
+    <ApplicationIcon Condition="Exists('..\icon.ico')">..\icon.ico</ApplicationIcon>
+    <RootNamespace>RadioSim</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <!-- same scheduler and audio code as the console app -->
+  <ItemGroup>
+    <Compile Include="..\RadioSim\Schedule.cs" Link="Shared\Schedule.cs" />
+    <Compile Include="..\RadioSim\Scheduler.cs" Link="Shared\Scheduler.cs" />
+    <Compile Include="..\RadioSim\Audio.cs" Link="Shared\Audio.cs" />
+    <Compile Include="..\RadioSim\Tracklist.cs" Link="Shared\Tracklist.cs" />
+    <Compile Include="..\RadioSim\Settings.cs" Link="Shared\Settings.cs" />
+    <Compile Include="..\RadioSim\Game\*.cs" Link="Shared\Game\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\icon.ico')">
+    <EmbeddedResource Include="..\icon.ico" LogicalName="app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.3" />
+  </ItemGroup>
+
+</Project>
