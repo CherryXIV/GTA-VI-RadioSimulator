@@ -4,7 +4,7 @@ namespace RadioSim;
 public sealed record Planned(Segment Segment, double StartsAt);
 
 /// <summary>
-/// Plays a station on a background thread. Keeps the next segments planned ahead (so the window
+/// Plays a station (or a podcast) on a background thread. Keeps the next segments planned ahead (so the window
 /// can show what is coming) and decodes one segment ahead. What is playing and how far in comes
 /// from the sound device's own position, so the window follows what is actually heard (the
 /// device has up to 2 s of audio queued ahead).
@@ -30,11 +30,20 @@ public sealed class RadioEngine : IDisposable
     readonly List<(long start, Planned p)> sent = new();
 
     public RadioEngine(Station station, int seed, Options options, GameAudio audio)
+        : this(new Scheduler(station, seed, options).Run(), audio) { }
+
+    /// <summary>Plays any running order; a finite one (a podcast's episodes) ends, see <see cref="Finished"/>.</summary>
+    public RadioEngine(IEnumerable<Segment> order, GameAudio audio)
     {
         this.audio = audio;
-        it = new Scheduler(station, seed, options).Run().GetEnumerator();
+        it = order.GetEnumerator();
         Fill();
     }
+
+    volatile bool done;
+
+    /// <summary>The running order ran out and the device has played all of it.</summary>
+    public bool Finished => done && player != null && player.Played >= player.Written;
 
     void Fill()
     {
@@ -143,9 +152,20 @@ public sealed class RadioEngine : IDisposable
                 {
                     lock (gate) { player.Flush(); sent.Clear(); }
                     skip.Dispose(); skip = new CancellationTokenSource();
+                    // a piece of a longer item (a podcast episode): skip the rest of the item too
+                    var last = cur.Segment;
+                    bool dropped = false;
+                    while (nxt != null && nxt.Segment.Continues(last)) { last = nxt.Segment; Fill(); nxt = Next(); dropped = true; }
+                    if (dropped)
+                    {
+                        var n2 = nxt;
+                        lock (gate) prefetched = n2;
+                        curPcm = n2 == null ? null : Task.Run(() => Render(n2.Segment));
+                    }
                 }
                 cur = nxt;
             }
+            done = true;
         }
         catch (Exception e) when (!stop.IsCancellationRequested)
         {

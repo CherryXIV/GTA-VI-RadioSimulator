@@ -3,16 +3,19 @@ namespace RadioSim;
 /// <summary>
 /// Song timestamps for a render, written next to the WAV in YouTube's chapter format:
 /// the first line is 0:00 (the station name when a song does not start the render), then one
-/// line per song. Untitled streams are left out; everything else (ads, idents, DJ links) falls
-/// inside the chapter of the song before it.
+/// line per song (or podcast episode). Untitled streams are left out; everything else (ads,
+/// idents, DJ links) falls inside the chapter of the song before it.
 /// </summary>
 public sealed class Tracklist
 {
     readonly List<(double at, string title)> songs = new();
+    Segment? last;
 
     public void Add(Segment seg, double at)
     {
-        if (seg.Category is not ("music" or "music_night")) return;
+        bool more = seg.Continues(last);                         // a later piece of an episode
+        last = seg;
+        if (more || seg.Category is not ("music" or "music_night" or "podcast")) return;
         if (seg.Label.StartsWith("0x")) return;                  // no title in the game data
         songs.Add((at, seg.Label));
     }

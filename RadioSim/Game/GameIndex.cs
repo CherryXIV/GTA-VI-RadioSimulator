@@ -14,7 +14,7 @@ namespace RadioSim.Game;
 public static class GameIndex
 {
     /// <summary>Bump when the schedule format or how it is read changes, so old caches are rebuilt.</summary>
-    public const int Version = 4;
+    public const int Version = 5;
 
     /// <summary>Display names of hidden stations whose name string isn't keyed by their label. Kept
     /// only when the text tables have that exact string.</summary>
@@ -129,6 +129,8 @@ public static class GameIndex
         uint pIntro = Hash.Partial("dj_intro"), pOutro = Hash.Partial("dj_outro");
         var voices = cfg.VoiceTable().Where(v => v.Value.Any(c => c.ctx == pIntro || c.ctx == pOutro)).ToList();
         var needed = new HashSet<uint>(stationSids);
+        var podLists = PodcastCandidates(cfg, stationSids);
+        foreach (var (_, items) in podLists) foreach (var (sid, _) in items) needed.Add(sid);
         foreach (var (_, ctxs) in voices)
             foreach (var (h, c) in ctxs)
                 for (int i = 1; i <= c; i++) needed.Add(Hash.TakeId(h, i));
@@ -312,8 +314,74 @@ public static class GameIndex
             sched.Stations[name] = st;
             log($"  {name,-28} {st.Songs.Count,3} songs, {st.Categories.Count} categories, DJ {(st.Person.Length > 0 ? st.Person : "-")}");
         }
+
+        // ---- podcasts
+        foreach (var (key, items) in podLists)
+        {
+            var frs = items.Select(x => First(x.sid, x.dur)).ToList();
+            if (frs.Any(f => f is not { Streamed: true })) continue;
+            var marks = frs.Select(f => TrackIds(f!)).ToList();
+            if (marks.Any(m => m.Count > 1)) continue;                           // a DJ mix, not episodes
+            int?[] ids = marks.Select(m => m.Count == 1 ? m[0] : (int?)null).ToArray();
+            (string artist, string title)? Entry(int? id) => id is { } i && text.Songs.TryGetValue(i, out var e) ? e : null;
+            // episodes carry a title; talk-radio show parts only the show's name
+            var named = ids.Select(Entry).Where(e => e is { title.Length: > 0 }).Select(e => e!.Value).ToList();
+            if (named.Count == 0) continue;
+            var show = named.Select(e => e.artist).Where(a => a.Length > 0).GroupBy(a => a).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key;
+            if (show == null || named.Any(e => e.artist.Length > 0 && e.artist != show)) continue;
+            // an episode without a marker takes the text entry its place in the list implies
+            for (int i = 0; i < ids.Length; i++)
+            {
+                if (ids[i] != null) continue;
+                for (int d = 1; d < ids.Length && ids[i] == null; d++)
+                    foreach (int j in new[] { i - d, i + d })
+                        if (j >= 0 && j < ids.Length && marks[j].Count == 1 && Entry(marks[j][0] + i - j) is { title.Length: > 0 } g
+                            && (g.artist == show || g.artist.Length == 0) && !ids.Contains(marks[j][0] + i - j))
+                        { ids[i] = marks[j][0] + i - j; break; }
+            }
+            var eps = new List<(Episode e, int? number)>();
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var title = Entry(ids[i])?.title is { Length: > 0 } t ? t : $"Episode {i + 1}";
+                var m = Regex.Match(title, @"#\s*(\d+)");
+                eps.Add((new Episode { Stream = $"{items[i].sid:X8}", Src = frs[i]!.Ref, Title = title, Duration = frs[i]!.Duration },
+                         m.Success ? int.Parse(m.Groups[1].Value) : null));
+            }
+            if (eps.All(x => x.number != null)) eps = eps.OrderBy(x => x.number).ToList();   // Drunk Kings' list isn't in order
+            if (sched.Podcasts.TryGetValue(show, out var have) && have.Count >= eps.Count) continue;
+            sched.Podcasts[show] = eps.Select(x => x.e).ToList();
+        }
+        foreach (var (show, eps) in sched.Podcasts.OrderBy(k => k.Key))
+            log($"  {show,-28} {eps.Count,3} episodes, {eps.Sum(e => e.Duration) / 60:0} min");
         log($"Done in {sw.Elapsed.TotalSeconds:0}s.");
         return sched;
+    }
+
+    /// <summary>Lists that may be a podcast: every item a track item of a sound at least 4 minutes
+    /// long, not all of them on a station. They are kept once their streams' TRACKID markers name
+    /// episodes of one show (Build): the talk-radio shows' parts and the La Perle mixtape also pass here.</summary>
+    static List<(uint key, List<(uint sid, double? dur)> items)> PodcastCandidates(AudioConfig cfg, HashSet<uint> stationSids)
+    {
+        var res = new List<(uint, List<(uint, double?)>)>();
+        foreach (var key in cfg.GKeys)
+        {
+            var d = cfg.ObjByKey(key);
+            if (d == null || d.Length < 16 || d[0] != 0x02) continue;
+            var v = Bin.Words(d);
+            int n = (int)Math.Min(v[2], v.Length - 3L);
+            if (n < 1 || n > 60) continue;
+            var items = new List<(uint, double?)>();
+            for (int i = 0; i < n; i++)
+            {
+                var o = cfg.Obj(v[3 + i]);
+                if (o is not { Length: >= 16 } || o[0] != 0x0f) break;
+                uint tr = Bin.U32(o, 12);
+                if (cfg.StreamOf(tr) is not { } hb || cfg.DurationOf(tr) is not >= 240) break;
+                items.Add((hb & Hash.Mask, cfg.DurationOf(tr)));
+            }
+            if (items.Count == n && !items.All(x => stationSids.Contains(x.Item1))) res.Add((key, items));
+        }
+        return res;
     }
 
     static V Get<K, V>(Dictionary<K, V> d, K k) where K : notnull where V : new()

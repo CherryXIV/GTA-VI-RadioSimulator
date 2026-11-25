@@ -11,6 +11,8 @@ public sealed class ScheduleFile
     /// <summary>Sizes and dates of the archives it was read from (see GameIndex.GameKey).</summary>
     [JsonPropertyName("game_key")] public string GameKey { get; set; } = "";
     [JsonPropertyName("stations")] public Dictionary<string, Station> Stations { get; set; } = new();
+    /// <summary>The podcasts (by name), each a list of episodes in episode order.</summary>
+    [JsonPropertyName("podcasts")] public Dictionary<string, List<Episode>> Podcasts { get; set; } = new();
     /// <summary>The game folder the clips are read from (not stored: the cache is per machine).</summary>
     [JsonIgnore] public string Game { get; set; } = "";
 }
@@ -100,6 +102,16 @@ public sealed class Song
 
     public string Name => Artist.Length > 0 && Title.Length > 0 ? $"{Artist} - {Title}"
         : Artist.Length > 0 ? Artist : Title.Length > 0 ? Title : $"0x{Stream}";
+}
+
+/// <summary>One podcast episode: a single stream, titled from the text tables.</summary>
+public sealed class Episode
+{
+    [JsonPropertyName("stream")] public string Stream { get; set; } = "";
+    /// <summary>Where the audio is: "&lt;bank offset&gt;:&lt;stream ID&gt;" in audio.rpf (hex).</summary>
+    [JsonPropertyName("src")] public string Src { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("duration")] public double Duration { get; set; }
 }
 
 /// <summary>One song inside a DJ mix: its start (seconds into the mix) and its name from the text tables.</summary>

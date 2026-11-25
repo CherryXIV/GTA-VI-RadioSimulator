@@ -5,9 +5,40 @@ public sealed record Voice(string Src, double At, string Label);
 
 /// <summary>One thing the station plays: a main file plus any DJ speech over it. A song of a DJ mix
 /// is the stretch of the mix's stream from <paramref name="Start"/> seconds, <paramref name="Duration"/>
-/// long; <paramref name="Part"/> then says which ("DJ mix, song 3 of 23").</summary>
+/// long; <paramref name="Part"/> then says which ("DJ mix, song 3 of 23"). A long item played in
+/// pieces (a podcast episode) has its full length in <paramref name="Whole"/>; each piece is the
+/// stretch from <paramref name="Start"/>, and every piece after the first continues the item.</summary>
 public sealed record Segment(string Category, string Src, string Label, double Duration, List<Voice> Voices,
-                             double Start = 0, string Part = "");
+                             double Start = 0, string Part = "", double Whole = 0)
+{
+    /// <summary>Only a stretch of the stream plays (a song of a mix, or a piece of an episode).</summary>
+    public bool Ranged => Part.Length > 0 || Whole > 0;
+
+    /// <summary>A later piece of the same item as <paramref name="prev"/>.</summary>
+    public bool Continues(Segment? prev) =>
+        prev != null && Whole > 0 && Start > 0 && prev.Src == Src && Math.Abs(prev.Start + prev.Duration - Start) < 0.01;
+
+    /// <summary>Seconds a piece is long: short enough that no piece needs much memory decoded
+    /// (3 minutes of 48 kHz stereo float is 66 MB).</summary>
+    public const double PieceSeconds = 180;
+
+    /// <summary>A podcast's episodes from episode <paramref name="from"/> (0-based) to the last, each
+    /// in pieces of <see cref="PieceSeconds"/>.</summary>
+    public static IEnumerable<Segment> Episodes(string podcast, IReadOnlyList<Episode> episodes, int from = 0)
+    {
+        for (int i = Math.Max(0, from); i < episodes.Count; i++)
+        {
+            var e = episodes[i];
+            string label = $"{podcast} - {e.Title}", part = $"{podcast}, episode {i + 1} of {episodes.Count}";
+            for (double a = 0; a < e.Duration - 0.01;)
+            {
+                double b = e.Duration - a < PieceSeconds * 1.5 ? e.Duration : a + PieceSeconds;   // no short last piece
+                yield return new Segment("podcast", e.Src, label, b - a, new List<Voice>(), a, part, e.Duration);
+                a = b;
+            }
+        }
+    }
+}
 
 public sealed class Options
 {

@@ -38,6 +38,10 @@ The Vault Radio, Worldwide FM and Radio On-U are each one long DJ mix. They play
 song, so each song shows up in "Now playing", Up next, the notifications and a render's
 timestamps.
 
+Podcasts: the "Podcasts" tab next to Stations lists the in-game podcasts by episode.
+Double-click an episode to play from it to the podcast's last episode; Skip goes to the next
+episode. "Render WAV..." saves the selected podcast from that episode on.
+
 Keys (in the window):
   Space         play / pause
   Ctrl+Right    skip
@@ -47,6 +51,8 @@ the window in the background (Options > "Use the keyboard's media keys").
 
 "Songs on this station" (next to History) lists the selected station's songs; type in the box
 to filter them.
+Songs in blue are on the station's night playlist: some stations (Honey FM, for one) have
+separate day and night song lists, and the station switches between them on its own.
 
 Options menu:
   - Minimize to the notification area: the icon there has Play/pause, Skip and station
@@ -71,6 +77,7 @@ Command line (optional): RadioSim.exe
   RadioSim.exe --station "Flash FM"
   RadioSim.exe --station "VCRR" --seed 1 --minutes 30 --out vcrr.wav
   RadioSim.exe --export-logos logos        (every station logo as a PNG)
+  RadioSim.exe --podcast "Drunk Kings"      (a podcast; --episode 3 starts at the third)
   RadioSim.exe --help                      (all options)
 
 --game is only needed once; the folder is remembered (the GUI and command line share it).

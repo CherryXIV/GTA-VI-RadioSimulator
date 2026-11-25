@@ -23,8 +23,8 @@ public sealed class GameAudio : IDisposable
     /// receives each DJ line's length.</summary>
     public float[] Render(Segment s, List<double>? voiceSeconds = null)
     {
-        // a song of a DJ mix is its stretch of the mix
-        var pcm = s.Part.Length > 0 ? Decode(s.Src, s.Start, s.Duration) : Decode(s.Src);
+        // a song of a DJ mix, or a piece of a podcast episode, is its stretch of the stream
+        var pcm = s.Ranged ? Decode(s.Src, s.Start, s.Duration) : Decode(s.Src);
         foreach (var v in s.Voices)
         {
             var vp = Decode(v.Src);

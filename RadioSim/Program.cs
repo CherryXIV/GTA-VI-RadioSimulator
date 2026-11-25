@@ -4,6 +4,7 @@ const string Usage = """
 RadioSim - play a GTA VI radio station the way its schedule data describes.
 
   RadioSim [--game <folder>] --station "<name>" [options]
+  RadioSim [--game <folder>] --podcast "<name>" [--episode <n>] [--out <file.wav>]
   RadioSim [--game <folder>] --list
 
   --game <folder>      your game folder (the one with audio.rpf and data.rpf). Remembered, so
@@ -15,6 +16,8 @@ RadioSim - play a GTA VI radio station the way its schedule data describes.
   --export-logos <dir> write each station's logo (from the game's UI textures) as <Station>.png
 
   --station <name>     station to play (e.g. "Flash FM"); a unique prefix is enough
+  --podcast <name>     podcast to play from its first episode (or --episode n) to its last
+  --episode <n>        the episode to start at (1 = the first)
   --seed <n>           repeatable run; leave out for a fresh shuffle every time
   --out <file.wav>     render to a WAV file instead of playing (also writes <file>.txt:
                        song timestamps in YouTube chapter format)
@@ -69,22 +72,36 @@ if (Arg("--decode") is { } one && args.Length > Array.IndexOf(args, "--decode") 
     w.Write(ga.Decode(one));
     return 0;
 }
-if (Arg("--station") == null && !Flag("--list") && (Flag("--rescan") || Arg("--export") != null || Arg("--export-logos") != null)) return 0;
+if (Arg("--station") == null && Arg("--podcast") == null && !Flag("--list") && (Flag("--rescan") || Arg("--export") != null || Arg("--export-logos") != null)) return 0;
 
 if (Flag("--list"))
 {
     foreach (var (name, s) in sched.Stations.OrderBy(k => k.Key))
         Console.WriteLine($"  {name,-28} {s.SongRows().Count,3} songs  {s.Categories.GetValueOrDefault("advert")?.Count ?? 0,3} ads  " +
                           $"{s.Songs.DistinctBy(x => x.Src).Count(x => x.Intros.Count > 0),3} songs with DJ intros");
+    if (sched.Podcasts.Count > 0) Console.WriteLine("Podcasts:");
+    foreach (var (name, eps) in sched.Podcasts.OrderBy(k => k.Key))
+    {
+        Console.WriteLine($"  {name,-28} {eps.Count,3} episodes");
+        for (int i = 0; i < eps.Count; i++) Console.WriteLine($"      {i + 1}. {eps[i].Title} ({TimeSpan.FromSeconds(eps[i].Duration):m\\:ss})");
+    }
     return 0;
 }
 
+List<string> Find(IEnumerable<string> names, string want)
+{
+    var m = names.Where(k => k.Equals(want, StringComparison.OrdinalIgnoreCase)).ToList();
+    return m.Count > 0 ? m : names.Where(k => k.StartsWith(want, StringComparison.OrdinalIgnoreCase)).ToList();
+}
+var wantPod = Arg("--podcast");
 var want = Arg("--station");
-if (want == null) { Console.Error.WriteLine("--station is required (see --list)"); return 1; }
-var match = sched.Stations.Keys.Where(k => k.Equals(want, StringComparison.OrdinalIgnoreCase)).ToList();
-if (match.Count == 0) match = sched.Stations.Keys.Where(k => k.StartsWith(want, StringComparison.OrdinalIgnoreCase)).ToList();
-if (match.Count != 1) { Console.Error.WriteLine($"station '{want}' {(match.Count == 0 ? "not found" : "is ambiguous")} (see --list)"); return 1; }
-var station = sched.Stations[match[0]];
+if (want == null && wantPod == null) { Console.Error.WriteLine("--station or --podcast is required (see --list)"); return 1; }
+var match = wantPod != null ? Find(sched.Podcasts.Keys, wantPod) : Find(sched.Stations.Keys, want!);
+if (match.Count != 1)
+{
+    Console.Error.WriteLine($"{(wantPod != null ? "podcast" : "station")} '{wantPod ?? want}' {(match.Count == 0 ? "not found" : "is ambiguous")} (see --list)");
+    return 1;
+}
 
 int seed = int.TryParse(Arg("--seed"), out var sd) ? sd : Random.Shared.Next();
 var opt = new Options();
@@ -97,15 +114,29 @@ var outWav = Arg("--out");
 double minutes = double.TryParse(Arg("--minutes"), System.Globalization.CultureInfo.InvariantCulture, out var m) ? m
                : outWav != null || Flag("--plan") ? 60 : double.PositiveInfinity;
 
-Console.WriteLine($"{match[0]}  (seed {seed})");
-var sch = new Scheduler(station, seed, opt);
+IEnumerable<Segment> order;
+if (wantPod != null)
+{
+    var eps = sched.Podcasts[match[0]];
+    int ep = int.TryParse(Arg("--episode"), out var en) ? Math.Clamp(en, 1, eps.Count) : 1;
+    Console.WriteLine($"{match[0]}  (episode {ep} of {eps.Count} to the last)");
+    order = Segment.Episodes(match[0], eps, ep - 1);
+    if (Arg("--minutes") == null) minutes = double.PositiveInfinity;          // to the end of the podcast
+}
+else
+{
+    Console.WriteLine($"{match[0]}  (seed {seed})");
+    order = new Scheduler(sched.Stations[match[0]], seed, opt).Run();
+}
 
 if (Flag("--plan"))
 {
     double t = 0;
-    foreach (var seg in sch.Run())
+    Segment? prev = null;
+    foreach (var seg in order)
     {
-        Print(seg, t);
+        if (!seg.Continues(prev)) Print(seg, t);
+        prev = seg;
         t += seg.Duration;
         if (t >= minutes * 60) break;
     }
@@ -125,20 +156,19 @@ WaveOutPlayer? player = wav == null ? new WaveOutPlayer() : null;
 try
 {
     double clock = 0;
-    using var it = sch.Run().GetEnumerator();
-    it.MoveNext();
-    var cur = it.Current;
-    var curPcm = Task.Run(() => Render(cur));
-    while (!cts.IsCancellationRequested && clock < minutes * 60)
+    using var it = order.GetEnumerator();
+    Segment? cur = it.MoveNext() ? it.Current : null, prev = null;
+    var curPcm = cur == null ? null : Task.Run(() => Render(cur));
+    while (cur != null && !cts.IsCancellationRequested && clock < minutes * 60)
     {
-        var pcm = curPcm.Result;
-        it.MoveNext();
-        var nextSeg = it.Current;
-        curPcm = Task.Run(() => Render(nextSeg));
-        Print(cur, clock);
+        var pcm = curPcm!.Result;
+        var nextSeg = it.MoveNext() ? it.Current : null;          // a podcast ends
+        curPcm = nextSeg == null ? null : Task.Run(() => Render(nextSeg));
+        if (!cur.Continues(prev)) Print(cur, clock);
         tracklist.Add(cur, clock);
         if (wav != null) wav.Write(pcm); else player!.Play(pcm, cts.Token);
         clock += pcm.Length / 2.0 / GameAudio.Rate;
+        prev = cur;
         cur = nextSeg;
     }
     player?.Drain();
@@ -162,6 +192,7 @@ void Print(Segment seg, double t)
     var what = seg.Category switch
     {
         "music" or "music_night" => seg.Label,
+        "podcast" => $"{seg.Label} ({TimeSpan.FromSeconds(seg.Whole):m\\:ss})",
         "advert" => $"Advert {seg.Label}",
         _ => $"{seg.Category} {seg.Label}",
     };

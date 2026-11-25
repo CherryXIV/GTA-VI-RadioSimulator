@@ -15,6 +15,9 @@ public sealed class MainForm : Form
 
     // ---- controls
     readonly ListView stations = new() { View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false, Dock = DockStyle.Fill };
+    readonly ListView podcasts = new() { View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false, Dock = DockStyle.Fill, ShowGroups = true, ShowItemToolTips = true };
+    readonly TabControl leftTabs = new() { Dock = DockStyle.Fill };
+    readonly TabPage stationsTab = new("Stations"), podcastsTab = new("Podcasts");
     readonly TextBox seedBox = new() { Width = 100 };
     readonly CheckBox shuffle = new() { Text = "Shuffle", Checked = true, AutoSize = true };
     readonly CheckBox rotation = new() { Text = "Play every song before repeating", AutoSize = true };
@@ -81,6 +84,7 @@ public sealed class MainForm : Form
         volume.Value = Math.Clamp(settings.Volume, volume.Minimum, volume.Maximum);
         hour.Value = DateTime.Now.Hour;
         stations.Columns.Add("Station", 175); stations.Columns.Add("Songs", 55); stations.Columns.Add("Ads", 45);
+        podcasts.Columns.Add("Episode", 220); podcasts.Columns.Add("Length", 55);
 
         // ---- layout
         var options = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Padding = new Padding(0, 4, 0, 0) };
@@ -115,7 +119,9 @@ public sealed class MainForm : Form
 
         var lists = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 200 };
         var upBox = new GroupBox { Text = "Up next", Dock = DockStyle.Fill }; upBox.Controls.Add(upNext);
-        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var tabs = new TabControl { Dock = DockStyle.Fill, ShowToolTips = true };
+        songsTab.ToolTipText = NightTip;
+        songs.ShowItemToolTips = true;
         var hiTab = new TabPage("History"); hiTab.Controls.Add(history);
         songsTab.Controls.Add(songs); songsTab.Controls.Add(songFilter);
         tabs.TabPages.Add(hiTab); tabs.TabPages.Add(songsTab);
@@ -130,8 +136,9 @@ public sealed class MainForm : Form
         right.Controls.Add(nowBox, 0, 2); right.Controls.Add(lists, 0, 3);
 
         split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
-        var stBox = new GroupBox { Text = "Stations", Dock = DockStyle.Fill }; stBox.Controls.Add(stations);
-        split.Panel1.Controls.Add(stBox); split.Panel2.Controls.Add(right);
+        stationsTab.Controls.Add(stations); podcastsTab.Controls.Add(podcasts);
+        leftTabs.TabPages.Add(stationsTab); leftTabs.TabPages.Add(podcastsTab);
+        split.Panel1.Controls.Add(leftTabs); split.Panel2.Controls.Add(right);
 
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("&File");
@@ -176,6 +183,7 @@ public sealed class MainForm : Form
         // ---- events
         play.Click += (_, _) => Play();
         stations.DoubleClick += (_, _) => Play();
+        podcasts.DoubleClick += (_, _) => Play();
         pause.Click += (_, _) => { engine?.TogglePause(); pause.Text = engine?.Paused == true ? "▶  Resume" : "❚❚  Pause"; };
         skip.Click += (_, _) => engine?.Skip();
         stopBtn.Click += (_, _) => StopPlayback();
@@ -200,6 +208,7 @@ public sealed class MainForm : Form
             float k = DeviceDpi / 96f;                  // list columns and splitter are not auto-scaled
             int[] w = { 180, 52, 44 };
             for (int i = 0; i < w.Length; i++) stations.Columns[i].Width = (int)(w[i] * k);
+            podcasts.Columns[0].Width = (int)(220 * k); podcasts.Columns[1].Width = (int)(52 * k);
             foreach (var l in new[] { upNext, history })
                 for (int i = 0; i < l.Columns.Count; i++) l.Columns[i].Width = (int)(new[] { 70, 90, 380, 300 }[i] * k);
             for (int i = 0; i < songs.Columns.Count; i++) songs.Columns[i].Width = (int)(new[] { 200, 260, 60, 70 }[i] * k);
@@ -252,7 +261,7 @@ public sealed class MainForm : Form
         StopPlayback();
         settings.GameFolder = game; settings.Save();
         play.Enabled = render.Enabled = false;
-        stations.Items.Clear();
+        stations.Items.Clear(); podcasts.Items.Clear(); podcasts.Groups.Clear();
         status.Text = "Reading the game files…";
         try
         {
@@ -276,6 +285,17 @@ public sealed class MainForm : Form
             it.SubItems.Add((s.Categories.GetValueOrDefault("advert")?.Count ?? 0).ToString());
             stations.Items.Add(it);
         }
+        foreach (var (name, eps) in sched.Podcasts.OrderBy(k => k.Key))
+        {
+            var g = new ListViewGroup(name, $"{name}  ({eps.Count} episodes, {Clock(eps.Sum(e => e.Duration))})");
+            podcasts.Groups.Add(g);
+            for (int i = 0; i < eps.Count; i++)
+            {
+                var it = new ListViewItem(eps[i].Title, g) { Tag = (name, i), ToolTipText = $"{name}: {eps[i].Title}" };
+                it.SubItems.Add(Clock(eps[i].Duration));
+                podcasts.Items.Add(it);
+            }
+        }
         var last = stations.Items.Cast<ListViewItem>().FirstOrDefault(i => (string)i.Tag! == settings.LastStation);
         if (last != null) { last.Selected = true; last.EnsureVisible(); }
         else if (stations.Items.Count > 0) stations.Items[0].Selected = true;
@@ -283,6 +303,14 @@ public sealed class MainForm : Form
     }
 
     string? SelectedStation => stations.SelectedItems.Count > 0 ? (string)stations.SelectedItems[0].Tag! : null;
+
+    bool PodcastsShown => leftTabs.SelectedTab == podcastsTab;
+
+    /// <summary>The selected episode (podcast, index), or the first one in the list; null when
+    /// there are no podcasts.</summary>
+    (string name, int index)? SelectedEpisode =>
+        podcasts.SelectedItems.Count > 0 ? ((string, int))podcasts.SelectedItems[0].Tag!
+        : podcasts.Items.Count > 0 ? ((string, int))podcasts.Items[0].Tag! : null;
 
     Options CurrentOptions()
     {
@@ -303,18 +331,37 @@ public sealed class MainForm : Form
 
     void Play()
     {
+        if (PodcastsShown) { PlayPodcast(); return; }
         if (sched == null || audio == null || SelectedStation is not { } name) return;
         StopPlayback();
         playingStation = name;
         if (!selfTest) { settings.LastStation = name; settings.Save(); }
         logo.Image = logos.GetValueOrDefault(name);
         playingSeed = ChooseSeed();
+        StartEngine(new RadioEngine(sched.Stations[name], playingSeed, CurrentOptions(), audio),
+                    $"{name}   ·   seed {playingSeed}", $"Playing {name} (seed {playingSeed}). Same seed + settings = same running order.");
+    }
+
+    /// <summary>Plays the selected podcast from the selected episode to its last one.</summary>
+    void PlayPodcast()
+    {
+        if (sched == null || audio == null || SelectedEpisode is not var (name, index)) return;
+        StopPlayback();
+        playingStation = name;
+        logo.Image = null;
+        var eps = sched.Podcasts[name];
+        StartEngine(new RadioEngine(Segment.Episodes(name, eps, index), audio),
+                    $"{name}   ·   podcast", $"Playing {name} from episode {index + 1} of {eps.Count} to the last one.");
+    }
+
+    void StartEngine(RadioEngine eng, string header, string playingStatus)
+    {
         history.Items.Clear(); upNext.Items.Clear();
-        engine = new RadioEngine(sched.Stations[name], playingSeed, CurrentOptions(), audio);
+        engine = eng;
         engine.SetVolume(volume.Value / 100.0);
         engine.Error += m => BeginInvoke(() => { status.Text = "Playback error: " + m; StopPlayback(); });
         ShowQueue(engine.Upcoming);
-        station.Text = $"{name}   ·   seed {playingSeed}";
+        station.Text = header;
         title.Text = "Tuning in…"; kind.Text = ""; voices.Text = "";
         try { engine.Start(); }
         catch (InvalidOperationException e)                // no sound device: say so instead of crashing
@@ -326,7 +373,7 @@ public sealed class MainForm : Form
         }
         tick.Start();
         pause.Enabled = skip.Enabled = stopBtn.Enabled = true; pause.Text = "❚❚  Pause";
-        status.Text = $"Playing {name} (seed {playingSeed}). Same seed + settings = same running order.";
+        status.Text = playingStatus;
         UpdateMediaKeys();
     }
 
@@ -338,25 +385,27 @@ public sealed class MainForm : Form
         progress.Value = 0; time.Text = "";
         if (playingStation != null) { title.Text = "Stopped"; kind.Text = ""; voices.Text = ""; }
         if (shown != null) AddRow(history, shown, insertTop: true);
-        shown = null;
+        shown = shownPiece = null;
         tray.Text = "GTA VI Radio Simulator";
         WriteNowPlaying();
         UpdateMediaKeys();
     }
 
-    Planned? shown;
+    /// <summary>The item playing (its first piece, for History) and the piece of it being heard
+    /// (a podcast episode plays in pieces).</summary>
+    Planned? shown, shownPiece;
 
     void OnSegment(Planned p)
     {
         if (shown != null) AddRow(history, shown, insertTop: true);
-        shown = p;
+        shown = shownPiece = p;
         var s = p.Segment;
         title.Text = Pretty(s);
-        kind.Text = $"{KindName(s.Category)}   ·   {Clock(s.Duration)}" + (s.Part.Length > 0 ? $"   ·   {s.Part}" : "");
+        kind.Text = $"{KindName(s.Category)}   ·   {Clock(s.Whole > 0 ? s.Whole : s.Duration)}" + (s.Part.Length > 0 ? $"   ·   {s.Part}" : "");
         voices.Text = s.Voices.Count == 0 ? "" : string.Join("     ", s.Voices.Select(v => $"🎙 {v.Label} at {Clock(v.At)}"));
         var tip = $"{playingStation}\n{Pretty(s)}";
         tray.Text = tip.Length > 127 ? tip[..127] : tip;
-        if (settings.SongNotifications && s.Category is "music" or "music_night" && !selfTest)
+        if (settings.SongNotifications && s.Category is "music" or "music_night" or "podcast" && !selfTest)
             tray.ShowBalloonTip(4000, playingStation ?? "", Pretty(s), ToolTipIcon.None);
         WriteNowPlaying();
     }
@@ -365,7 +414,12 @@ public sealed class MainForm : Form
     {
         upNext.BeginUpdate();
         upNext.Items.Clear();
-        foreach (var p in q) AddRow(upNext, p, insertTop: false);
+        var prev = shownPiece?.Segment;
+        foreach (var p in q)
+        {
+            if (!p.Segment.Continues(prev)) AddRow(upNext, p, insertTop: false);   // one row per episode
+            prev = p.Segment;
+        }
         upNext.EndUpdate();
     }
 
@@ -376,19 +430,34 @@ public sealed class MainForm : Form
         it.SubItems.Add(KindName(s.Category));
         it.SubItems.Add(Pretty(s));
         it.SubItems.Add(string.Join(", ", s.Voices.Select(v => v.Label.Replace("DJ ", ""))));
-        if (s.Category is not ("music" or "music_night")) it.ForeColor = Color.DimGray;
+        if (s.Category is not ("music" or "music_night" or "podcast")) it.ForeColor = Color.DimGray;
         if (insertTop) l.Items.Insert(0, it); else l.Items.Add(it);
     }
 
     /// <summary>Runs every 50 ms: follows what the sound device is actually playing.</summary>
     void UpdateProgress()
     {
+        if (engine is { Finished: true })                   // a podcast's last episode is over
+        {
+            var done = playingStation;
+            StopPlayback();
+            title.Text = "Finished"; status.Text = $"Played {done} to the end.";
+            return;
+        }
         if (engine?.Now is not var (p, heard)) return;
-        if (!ReferenceEquals(p, shown)) { OnSegment(p); ShowQueue(engine.Upcoming); }
-        double pos = Math.Min(heard, p.Segment.Duration), dur = Math.Max(1, p.Segment.Duration);
-        progress.Value = (int)Math.Clamp(pos / dur * 1000, 0, 1000);
+        if (!ReferenceEquals(p, shownPiece))
+        {
+            if (p.Segment.Continues(shownPiece?.Segment)) shownPiece = p;   // the episode's next piece
+            else OnSegment(p);
+            ShowQueue(engine.Upcoming);
+        }
+        // a piece of a longer item counts from the item's start
+        var sg = p.Segment;
+        double pos = Math.Min(heard, sg.Duration);
+        double whole = sg.Whole > 0 ? sg.Whole : sg.Duration, at = sg.Whole > 0 ? sg.Start + pos : pos;
+        progress.Value = (int)Math.Clamp(at / Math.Max(1, whole) * 1000, 0, 1000);
         progress.Maximum = 1000;
-        time.Text = $"{Clock(pos)} / {Clock(p.Segment.Duration)}";
+        time.Text = $"{Clock(at)} / {Clock(whole)}";
         // highlight the DJ line while it is talking
         var talking = p.Segment.Voices.Where((v, i) => pos >= v.At && pos < v.At + (engine.VoiceSeconds(p.Segment, i) ?? 12)).Any();
         voices.ForeColor = talking ? Color.OrangeRed : Color.SteelBlue;
@@ -398,13 +467,20 @@ public sealed class MainForm : Form
 
     async Task RenderWav()
     {
-        if (sched == null || audio == null || SelectedStation is not { } name) return;
+        if (sched == null || audio == null) return;
+        bool pod = PodcastsShown;
+        string name;
+        int epFrom = 0;
+        if (pod) { if (SelectedEpisode is not var (pn, pi)) return; (name, epFrom) = (pn, pi); }
+        else if (SelectedStation is { } sn) name = sn;
+        else return;
         using var dlg = new SaveFileDialog { Filter = "WAV|*.wav", FileName = $"{name} {DateTime.Now:yyyy-MM-dd HHmm}.wav" };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         int seed = ChooseSeed();
         var opt = CurrentOptions();
         double minutes = (double)renderMinutes.Value;
-        var st = sched.Stations[name]; var ga = audio; var path = dlg.FileName;
+        var order = pod ? Segment.Episodes(name, sched.Podcasts[name], epFrom) : new Scheduler(sched.Stations[name], seed, opt).Run();
+        var ga = audio; var path = dlg.FileName;
         render.Enabled = false;
         try
         {
@@ -413,7 +489,7 @@ public sealed class MainForm : Form
                 using var wav = new WavWriter(path);
                 var tracklist = new Tracklist();
                 double clock = 0;
-                foreach (var seg in new Scheduler(st, seed, opt).Run())
+                foreach (var seg in order)
                 {
                     var pcm = ga.Render(seg);
                     tracklist.Add(seg, clock);
@@ -424,7 +500,7 @@ public sealed class MainForm : Form
                 }
                 tracklist.Write(Path.ChangeExtension(path, ".txt"), name, seed, clock);
             });
-            status.Text = $"Wrote {path} and its song timestamps ({Path.GetFileName(Path.ChangeExtension(path, ".txt"))}), seed {seed}";
+            status.Text = $"Wrote {path} and its timestamps ({Path.GetFileName(Path.ChangeExtension(path, ".txt"))})" + (pod ? "" : $", seed {seed}");
         }
         catch (Exception e) { MessageBox.Show(this, e.Message, "Render failed", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         finally { render.Enabled = true; }
@@ -441,6 +517,11 @@ public sealed class MainForm : Form
         {
             for (int i = 0; i < 600 && stations.Items.Count == 0; i++) await Task.Delay(100);   // game files still loading
             foreach (ListViewItem it in stations.Items) it.Selected = (string)it.Tag! == stationName;
+            if (sched?.Podcasts.ContainsKey(stationName) == true)      // a podcast: its first episode
+            {
+                leftTabs.SelectedTab = podcastsTab;
+                foreach (ListViewItem it in podcasts.Items) it.Selected = ((string, int))it.Tag! == (stationName, 0);
+            }
             volume.Value = 0;
             Play();
             await Task.Delay(9000);
@@ -506,6 +587,10 @@ public sealed class MainForm : Form
 
     // ---- songs on the selected station
 
+    /// <summary>What the blue rows in "Songs on this station" are.</summary>
+    const string NightTip = "Blue: the station's night playlist. The station's own scheduling decides when it moves "
+                            + "between its day and night songs; the DJ may link the two (\"to night\" / \"to day\").";
+
     void ShowSongs()
     {
         songs.BeginUpdate();
@@ -524,7 +609,8 @@ public sealed class MainForm : Form
                 it.SubItems.Add(r.Title.Length > 0 ? r.Title : r.InMix ? "—" : $"0x{x.Stream}");
                 it.SubItems.Add(Clock(r.Duration));
                 it.SubItems.Add(r.InMix ? "in DJ mix" : (x.Intros.Count + x.Outros.Count).ToString());
-                if (x.Category == "music_night") it.ForeColor = Color.SlateBlue;
+                if (x.Category == "music_night") { it.ForeColor = Color.SlateBlue; it.ToolTipText = NightTip; }
+                else if (r.InMix) it.ToolTipText = $"Plays as part of the DJ mix \"{x.Name}\"";
                 songs.Items.Add(it);
             }
         }
@@ -651,13 +737,14 @@ public sealed class MainForm : Form
         return t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
     }
 
-    static string Pretty(Segment s) => s.Category is "music" or "music_night" ? s.Label
+    static string Pretty(Segment s) => s.Category is "music" or "music_night" or "podcast" ? s.Label
         : s.Label.StartsWith("0x") ? $"{KindName(s.Category)} {s.Label}" : $"{KindName(s.Category)} · {s.Label}";
 
     static string KindName(string cat) => cat switch
     {
         "music" => "Song",
         "music_night" => "Song (night)",
+        "podcast" => "Podcast",
         "advert" => "Advert",
         "ident" => "Ident",
         "ident_night" => "Ident (night)",
