@@ -25,12 +25,14 @@ public sealed class Station
     [JsonPropertyName("songs")] public List<Song> Songs { get; set; } = new();
 
     /// <summary>The station's songs for listing: its own songs, then the songs of its DJ mixes that
-    /// it doesn't also have on their own (with the length of their stretch of the mix).</summary>
+    /// it doesn't also have on their own (with the length of their stretch of the mix). A song in
+    /// both the day and the night list (all of Circoloco's) is listed once.</summary>
     public List<(string Artist, string Title, double Duration, Song Song, bool InMix)> SongRows()
     {
-        var rows = Songs.Where(s => s.Tracks == null).Select(s => (s.Artist, s.Title, s.Duration, s, false)).ToList();
+        var own = Songs.DistinctBy(s => s.Src).ToList();
+        var rows = own.Where(s => s.Tracks == null).Select(s => (s.Artist, s.Title, s.Duration, s, false)).ToList();
         var have = rows.Select(r => r.s.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var mix in Songs.Where(s => s.Tracks != null))
+        foreach (var mix in own.Where(s => s.Tracks != null))
             for (int i = 0; i < mix.Tracks!.Count; i++)
             {
                 var t = mix.Tracks[i];

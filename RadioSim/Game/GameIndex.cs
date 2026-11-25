@@ -14,22 +14,13 @@ namespace RadioSim.Game;
 public static class GameIndex
 {
     /// <summary>Bump when the schedule format or how it is read changes, so old caches are rebuilt.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     /// <summary>Display names of hidden stations whose name string isn't keyed by their label. Kept
     /// only when the text tables have that exact string.</summary>
     static readonly Dictionary<string, string> HiddenNames = new()
     {
         ["hidden_radio_haitian_mixtape"] = "The Sniper of La Perle",
-    };
-
-    /// <summary>Stations whose own track list is a placeholder: the DJ mix that is their music
-    /// instead. The Vault Radio lists one Power Trip song; its music is the Vault DJ mix (stream
-    /// 09B3F224, 83 min, TRACKID markers 3201–3223), which the game's own playlists only list
-    /// under The Wipe.</summary>
-    static readonly Dictionary<string, uint> StationMix = new()
-    {
-        ["radio_the_vault"] = 0x09B3F224,
     };
 
     public static readonly string[] CategoryNames =
@@ -138,7 +129,6 @@ public static class GameIndex
         uint pIntro = Hash.Partial("dj_intro"), pOutro = Hash.Partial("dj_outro");
         var voices = cfg.VoiceTable().Where(v => v.Value.Any(c => c.ctx == pIntro || c.ctx == pOutro)).ToList();
         var needed = new HashSet<uint>(stationSids);
-        needed.UnionWith(StationMix.Values);
         foreach (var (_, ctxs) in voices)
             foreach (var (h, c) in ctxs)
                 for (int i = 1; i <= c; i++) needed.Add(Hash.TakeId(h, i));
@@ -269,9 +259,11 @@ public static class GameIndex
             foreach (var (id, at) in marks)
             {
                 if (song.Tracks.Count > 0 && marks.Any(m => m.id == id && m.at < at)) continue;   // a song's second marker
-                var (a, t) = text.Songs.TryGetValue(id, out var s) ? s : ("", "");
-                song.Tracks.Add(new MixTrack { At = at, Artist = a, Title = t.Length > 0 || a.Length > 0 ? t : $"Track {id}" });
+                // a marker the text tables don't name (Worldwide FM's 13 s intro) joins the song next to it
+                if (!text.Songs.TryGetValue(id, out var s) || s.artist.Length + s.title.Length == 0) continue;
+                song.Tracks.Add(new MixTrack { At = at, Artist = s.artist, Title = s.title });
             }
+            if (song.Tracks.Count < 2) { song.Tracks = null; return song; }
             if (artist.Length == 0 && title.Length == 0) song.Title = $"DJ mix ({song.Tracks.Count} songs)";
             return song;
         }
@@ -315,11 +307,6 @@ public static class GameIndex
                         });
                 }
                 if (files.Count > 0) st.Categories[cat] = files;
-            }
-            if (StationMix.TryGetValue(lrow.Label, out var mixSid) && First(mixSid) is { Streamed: true } mfr)
-            {
-                st.Songs.RemoveAll(s => s.Category == "music");
-                st.Songs.Add(MakeSong(mixSid, mfr, "music", "", ""));
             }
             st.Dj.Lines = djGen.GetValueOrDefault(name) ?? new();
             sched.Stations[name] = st;

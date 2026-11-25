@@ -75,7 +75,7 @@ if (Flag("--list"))
 {
     foreach (var (name, s) in sched.Stations.OrderBy(k => k.Key))
         Console.WriteLine($"  {name,-28} {s.SongRows().Count,3} songs  {s.Categories.GetValueOrDefault("advert")?.Count ?? 0,3} ads  " +
-                          $"{s.Songs.Count(x => x.Intros.Count > 0),3} songs with DJ intros");
+                          $"{s.Songs.DistinctBy(x => x.Src).Count(x => x.Intros.Count > 0),3} songs with DJ intros");
     return 0;
 }
 

@@ -162,15 +162,26 @@ public sealed class AudioConfig
     /// = 49.115 s for AfroBank's copy of dj_banter clip 02DE0C31, 0x33B2 = 13.234 s for Back Country's).</summary>
     public double? DurationOf(uint n) => Record(n) is var (p, _) && p >= 6 ? Bin.U32(B, p - 6) / 1000.0 : null;
 
-    /// <summary>The sound record for track-item reference n: the position of its u32 id and of its hash_b.</summary>
+    /// <summary>The sound record for track-item reference n: the position of its u32 id and of its hash_b.
+    /// The index entry of a track-item sound points at the id of the record just <em>before</em> its
+    /// own (the previous song's), so its record is the next one. Checked against the songs whose track
+    /// item also names its metadata object (stream = joaat(name)): the next record is right for 557 of
+    /// 558, the record at the entry for none. (Taking the record at the entry put every list's last
+    /// song at the head of the next list: Real Dimez on Vice City FM, Erlkönig on The Chamber.)</summary>
     (int p, int hashB)? Record(uint n)
     {
         if (n >= GRef.Count || GRef[(int)n].type != 2) return null;
         if (!soff.TryGetValue(GRef[(int)n].hash, out var o)) return null;
-        // two record layouts: [0c 01][u32 id][0c 00][hash_a][hash_b] and
-        // [0c 01][u32 id][0c 11 00 40 03][hash_a][hash_b]; the index points near the id
         int bs = sbase + o;
-        for (int p = bs - 8; p <= bs + 8; p++)
+        if (RecordIn(bs - 8, bs + 8) is not { } before) return null;
+        return RecordIn(before.p + 9, before.p + 96);
+    }
+
+    /// <summary>The first sound record whose u32 id is at a position in [from, to]. Two layouts:
+    /// [0c 01][u32 id][0c 00][hash_a][hash_b] and [0c 01][u32 id][0c 11 00 40 03][hash_a][hash_b].</summary>
+    (int p, int hashB)? RecordIn(int from, int to)
+    {
+        for (int p = from; p <= to; p++)
         {
             if (p < 2 || p + 17 > B.Length) continue;
             if (B[p - 2] != 0x0c || B[p - 1] != 0x01 || B[p + 4] != 0x0c) continue;
