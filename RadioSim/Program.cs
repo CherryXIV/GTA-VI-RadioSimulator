@@ -12,6 +12,7 @@ RadioSim - play a GTA VI radio station the way its schedule data describes.
                        happens again by itself.
   --rescan             read the game files again now
   --export <file.json> write the station data read from the game to a file
+  --export-logos <dir> write each station's logo (from the game's UI textures) as <Station>.png
 
   --station <name>     station to play (e.g. "Flash FM"); a unique prefix is enough
   --seed <n>           repeatable run; leave out for a fresh shuffle every time
@@ -46,6 +47,20 @@ catch (Exception e) when (e is IOException or InvalidDataException or Unauthoriz
     return 1;
 }
 if (Arg("--export") is { } exp) { RadioSim.Game.GameIndex.Save(sched, exp); Console.WriteLine($"wrote {exp}"); }
+if (Arg("--export-logos") is { } logoDir)
+{
+    try
+    {
+        var (n, miss) = RadioSim.Game.StationLogos.Export(sched, logoDir);
+        Console.WriteLine($"wrote {n} of {sched.Stations.Count} station logos to {logoDir}");
+        foreach (var s in miss) Console.WriteLine($"  no logo: {s}");
+    }
+    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"Could not read the station logos: {e.Message}");
+        return 1;
+    }
+}
 // debugging aid: --decode <bank:stream> <out.wav> writes one clip
 if (Arg("--decode") is { } one && args.Length > Array.IndexOf(args, "--decode") + 2)
 {
@@ -54,7 +69,7 @@ if (Arg("--decode") is { } one && args.Length > Array.IndexOf(args, "--decode") 
     w.Write(ga.Decode(one));
     return 0;
 }
-if (Arg("--station") == null && !Flag("--list") && (Flag("--rescan") || Arg("--export") != null)) return 0;
+if (Arg("--station") == null && !Flag("--list") && (Flag("--rescan") || Arg("--export") != null || Arg("--export-logos") != null)) return 0;
 
 if (Flag("--list"))
 {
