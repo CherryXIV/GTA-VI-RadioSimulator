@@ -23,9 +23,12 @@ It comes with **no music and no game data**. It reads everything from your own c
 - **Controls:** Play, Pause, Skip and Stop.
 - **Render WAV…** saves a mix to a file, plus a `.txt` of song timestamps.
 - **Settings:** seed (untick Shuffle to get the same running order again), hour, weather, how often the DJ talks, and "Play every song before repeating".
-- **Now playing:** the current item and its DJ lines, highlighted while the DJ talks. **Up next** shows the next 50 items and **History** what has played.
+- **Now playing:** the station's logo, the current item and its DJ lines, highlighted while the DJ talks. **Up next** shows the next 50 items, **History** what has played, and **Songs on this station** the selected station's songs (with a filter box).
+- **Station logos** are read from the game's UI textures and shown in the station list. **File → Export station logos…** saves them as PNGs.
+- **Keys:** Space plays/pauses, Ctrl+Right skips, Page Down / Page Up go to the next / previous station. The keyboard's media keys (play/pause, next, stop) work while a station is on, even in the background.
+- **Options:** minimize to the notification area, a notification for each song, and "now playing" files (`Data\Now playing\song.txt`, `station.txt`, `station.png`) for a text or image source in OBS. Volume, DJ talk, weather, rotation and the last station are remembered.
 
-**Where it keeps things:** a `Data` folder next to the program holds your game folder setting and the station data read from the game (about 1 MB). Delete it to reset. If the program's folder can't be written to, it uses `%LOCALAPPDATA%\GTA VI Radio Simulator` instead.
+**Where it keeps things:** a `Data` folder next to the program holds your settings and the station data and logos read from the game (about 2 MB). Delete it to reset. If the program's folder can't be written to, it uses `%LOCALAPPDATA%\GTA VI Radio Simulator` instead.
 
 ### Command line
 
@@ -39,6 +42,7 @@ The zip also has `RadioSim.exe`, which plays or renders from a terminal:
 .\RadioSim.exe --station "Honey FM" --plan              # running order only
 .\RadioSim.exe --station "VCRR" --hour 20 --weather bad # evening, bad-weather lines
 .\RadioSim.exe --rescan --export schedule.json          # read the game again, save the station data
+.\RadioSim.exe --export-logos logos                     # every station logo as a PNG
 .\RadioSim.exe --help                                   # all options
 ```
 
@@ -48,6 +52,7 @@ There is no extraction step. On first run the program reads the station data str
 
 - **Audio config:** the zlib pages before the first sound bank in `audio.rpf`. They hold the stations, their categories, scheduling tables and DJ rules, and the speech table that lists every DJ line.
 - **Text tables:** the zlib pages in `data.rpf`. They hold the station names and song titles.
+- **Station logos:** 256×256 textures in the UI texture pool `data\ttdb\ui\ttdb_ui.ttpf` (a loose file, not in an archive). See [Station logos](#station-logos) below.
 - **Sound banks:** while a station plays, each clip is decoded from its AWC bank in `audio.rpf`. Opus is decoded in-process (Concentus) at each stream's real playback rate. ffmpeg isn't needed. Streamed banks reuse channel IDs, so one clip ID can be in many banks; the bank whose stream length matches the clip's sound record (within 0.05 s) is used.
 
 ## Building from source
@@ -69,11 +74,22 @@ RadioSim\bin\Release\net10.0\RadioSim.exe --help
   - `AudioConfig.cs`: game objects, sounds, curves and the speech table
   - `TextTables.cs`: station names and song titles
   - `GameIndex.cs`: builds the stations and caches them
+  - `TexturePool.cs`: RDS5/ETPF texture pools and the Gfx10 tiling; `Bc.cs`: BC1/BC3/BC7 decoding
+  - `StationLogos.cs`: finds each station's logo, caches it as a PNG
 - **`RadioSim.Gui/`** is the window. It compiles the same engine files, so a given seed gives the same running order in both.
 - **`icon.ico`** is the program icon. It's made from `icon.png` and used for both exes and the window.
 - **Test mode:** `"GTA VI Radio Simulator.exe" --selftest out.png "Station"` plays muted for a few seconds, saves a screenshot and exits.
 
 ## Format notes
+
+### Station logos
+
+The logos live in the UI texture pool `data\ttdb\ui\ttdb_ui.ttpf`. The extractor's `export_logos.py` worked this out; `TexturePool.cs` is a C# port of the parts it uses (`gta6x.rds5`, `gta6x.texture`, `gta6x.gfx10`).
+
+- **Pool:** `RDS5` header, then a chunk table. Each `u64` entry packs the source offset / 256 (bits 0–25), the codec (26–29: 0 stored, 8 zlib, others BCPack), the virtual offset / 4096 (30–51) and padding (52–55). The chunks make a virtual address space.
+- **Dictionary:** an `ETPF` block (version 634) at the next 256-byte boundary. It has 16 bytes per texture (width, height, mips, DXGI format, tile mode, first virtual page), then one 64-bit name hash per texture.
+- **Names:** the hash is the low 64 bits of MurmurHash3 x64 128 (seed 0) of the texture name. A station's logo is `radio_<station>`. The program tries the station's audio label and its display name, each with trailing words dropped, and keeps the first exact hash match (`radio_kaleidoscope`, `radio_leonida_jazz`, `radio_worldwide_fm`). 21 of 22 stations match; The Vault has none.
+- **Pixels:** the logos are BC1 or BC7, one mip, tile mode 1 (Gfx10 `SW_4KB_S`): 4 KiB blocks of 32×16 (BC1) or 16×16 (BC7) compressed blocks, with a fixed x/y bit order inside each one. Every logo sits in plain zlib chunks, so no BCPack is needed. The output matches the extractor's PNGs exactly for BC7. For BC1 it differs by at most 2/255 per channel, because the D3D rule rounds the interpolated colours where the Python decoder truncates them.
 
 ### Read from the game data
 
