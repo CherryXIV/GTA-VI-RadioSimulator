@@ -14,13 +14,15 @@ namespace RadioSim.Game;
 public static class GameIndex
 {
     /// <summary>Bump when the schedule format or how it is read changes, so old caches are rebuilt.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     public static readonly string[] CategoryNames =
     {
         "music", "music_night", "music_bed", "advert", "ident", "ident_night", "ident_to_ads",
         "identfromads", "identfromnews", "talk", "talk_night", "showintro", "showintro_night",
         "showoutro", "showoutro_night", "news", "weather", "djsolo", "to_ad", "to_news",
+        // recovered by the extractor's crack_hashes.py (hash-verified)
+        "identfromtalk", "dj_banter", "dj_banter_night", "dj_banter_story", "dj_banter_welcome",
     };
     static readonly Dictionary<uint, string> CatOf = CategoryNames.ToDictionary(c => Hash.Joaat("radio_track_category_" + c));
 
@@ -78,7 +80,8 @@ public static class GameIndex
         File.WriteAllText(path, JsonSerializer.Serialize(s, o));
     }
 
-    sealed record Row(uint Sid, string Station, string Label, string Category);
+    /// <summary>A station clip; <paramref name="Duration"/> is the length its sound record gives (seconds), when known.</summary>
+    sealed record Row(uint Sid, string Station, string Label, string Category, double? Duration);
 
     public static ScheduleFile Build(string game, Action<string>? log = null)
     {
@@ -150,29 +153,54 @@ public static class GameIndex
             if (!infos.TryGetValue((bank, sid), out var i)) infos[(bank, sid)] = i = awc.Info(headers[bank], sid);
             return i;
         }
-        // the first bank (lowest offset) holding a playable copy of the stream
-        StreamInfo? First(uint sid)
+        // Streamed banks reuse channel IDs, so a station clip's ID can occur in many banks (02DE0C31,
+        // a dj_banter clip on 18 stations, is in 18). When several banks hold a playable copy, the one
+        // whose length matches the station's sound record (within 0.05 s) is it; otherwise the first
+        // bank (lowest offset).
+        var firsts = new Dictionary<(uint, double?), StreamInfo?>();
+        StreamInfo? First(uint sid, double? want = null)
         {
-            if (!banksOf.TryGetValue(sid, out var l)) return null;
-            foreach (var b in l)
-                if (Info(b, sid) is { } i && (!i.Streamed || i.Codec == AwcArchive.CodecOpus)) return i;
-            return null;
+            if (firsts.TryGetValue((sid, want), out var f)) return f;
+            if (!banksOf.TryGetValue(sid, out var l)) return firsts[(sid, want)] = null;
+            var ok = l.Select(b => Info(b, sid)).Where(i => i != null && (!i.Streamed || i.Codec == AwcArchive.CodecOpus)).ToList();
+            if (ok.Count > 1 && want is { } w && ok.FirstOrDefault(i => Math.Abs(i!.Duration - w) < 0.05) is { } hit)
+                return firsts[(sid, want)] = hit;
+            return firsts[(sid, want)] = ok.FirstOrDefault();
         }
+        StreamInfo? FirstOf(Row r) => First(r.Sid, r.Duration);
+        var bankEvents = new Dictionary<long, List<(uint type, uint param, uint sample)>>();
+        List<(uint type, uint param, uint sample)> Events(long bank)
+        {
+            if (!bankEvents.TryGetValue(bank, out var e)) bankEvents[bank] = e = awc.Events(headers[bank]);
+            return e;
+        }
+        uint evTrack = Hash.Joaat("trackid"), evDj = Hash.Joaat("dj");
+        // the TRACKID marker numbers of a streamed song (one for a normal song)
+        List<int> TrackIds(StreamInfo fr) => fr.Streamed
+            ? Events(fr.Bank).Where(e => e.type == evTrack).Select(e => Bin.F32(e.param)).Where(x => x > 0 && x < 1e6)
+                             .Select(x => (int)x).Distinct().ToList()
+            : new List<int>();
+        int picked = rows.Count(r => FirstOf(r) is { } fi && First(r.Sid) is { } f0 && fi.Bank != f0.Bank);
+        log($"  {picked} station clips whose ID is in several banks matched to their bank by length");
+
+        // songs by title, for DJ lines named after the title (dj_intro_dont_chart): the text table's
+        // track ID → the station song stream carrying that TRACKID marker
+        var streamOfTid = new Dictionary<int, uint>();
+        foreach (var r in rows)
+            if (r.Category is "music" or "music_night" && FirstOf(r) is { Streamed: true, Channel: 0 } fr && TrackIds(fr) is [var tid1])
+                streamOfTid.TryAdd(tid1, r.Sid);
+        var titled = text.Songs.Select(kv => (kv.Value.title, streamOfTid.TryGetValue(kv.Key, out var ss) ? ss : (uint?)null)).ToList();
 
         // ---- DJ lines per station
         log("Matching DJ lines to stations…");
-        var djRows = DjLines(cfg, rows, voices, songIds, banksOf);
+        var djRows = DjLines(rows, voices, songIds, titled, banksOf, log);
         var djSong = new Dictionary<string, Dictionary<uint, Dictionary<string, List<string>>>>();
         var djGen = new Dictionary<string, Dictionary<string, List<string>>>();
         foreach (var r in djRows)
         {
             if (r.Station.Length == 0 || Info(r.Bank, r.Sid) is not { } inf) continue;
-            var m = Regex.Match(r.Context, "^dj_(intro|outro)_(.+)$");
-            if (m.Success && !DjContexts.Contains(r.Context))
-            {
-                uint ssid = Hash.Joaat(m.Groups[2].Value) & Hash.Mask;
-                Get(Get(Get(djSong, r.Station), ssid), m.Groups[1].Value).Add(inf.Ref);
-            }
+            if (r.Song is { } ssid)
+                Get(Get(Get(djSong, r.Station), ssid), r.Context.StartsWith("dj_intro_") ? "intro" : "outro").Add(inf.Ref);
             else if (DjContexts.Contains(r.Context))
                 Get(Get(djGen, r.Station), r.Context[3..]).Add(inf.Ref);
         }
@@ -193,20 +221,10 @@ public static class GameIndex
             var a = art is { Length: > 0 } && art[0] == 0x07 ? Bin.CStr(art, 5, 40) : "";
             metaTitle[Hash.Joaat(tid.ToLowerInvariant()) & Hash.Mask] = (spaced.GetValueOrDefault(a, a), Text.Title(tid.Replace('_', ' ')));
         }
-        var bankEvents = new Dictionary<long, List<(uint type, uint param, uint sample)>>();
-        List<(uint type, uint param, uint sample)> Events(long bank)
-        {
-            if (!bankEvents.TryGetValue(bank, out var e)) bankEvents[bank] = e = awc.Events(headers[bank]);
-            return e;
-        }
-        uint evTrack = Hash.Joaat("trackid"), evDj = Hash.Joaat("dj");
         var djMarkers = new[] { "intro_start", "intro_end", "outro_start", "outro_end" }.ToDictionary(n => Hash.Joaat(n));
         (string artist, string title) SongTitle(StreamInfo fr)
         {
-            var tids = fr.Streamed
-                ? Events(fr.Bank).Where(e => e.type == evTrack).Select(e => Bin.F32(e.param)).Where(x => x > 0 && x < 1e6)
-                                 .Select(x => (int)x).Distinct().ToList()
-                : new List<int>();
+            var tids = TrackIds(fr);
             (string, string)? s = tids.Count == 1 && text.Songs.TryGetValue(tids[0], out var t) ? t : null;
             if (s is { } ss && ss.Item2.Length > 0) return ss;
             return metaTitle.TryGetValue(fr.Id, out var mt) ? mt : s is { } s2 ? (s2.Item1, "") : ("", "");
@@ -214,9 +232,9 @@ public static class GameIndex
 
         // ---- stations
         log("Building the station schedules…");
-        var clips = new Dictionary<string, Dictionary<string, List<uint>>>();
+        var clips = new Dictionary<string, Dictionary<string, List<Row>>>();
         foreach (var r in rows)
-            if (First(r.Sid) != null) Get(Get(clips, r.Station), r.Category).Add(r.Sid);
+            if (FirstOf(r) != null) Get(Get(clips, r.Station), r.Category).Add(r);
         var sched = new ScheduleFile { Version = Version, GameKey = GameKey(game), Game = game };
         var ex = new Extract(cfg, curves);
         foreach (var key in cfg.GKeys)
@@ -227,12 +245,13 @@ public static class GameIndex
             if (lrow == null) continue;
             string name = lrow.Station;
             var st = ex.Station(d, lrow.Label);
-            foreach (var (cat, sids) in clips.GetValueOrDefault(name) ?? new())
+            foreach (var (cat, crows) in clips.GetValueOrDefault(name) ?? new())
             {
                 var files = new List<Clip>();
-                foreach (var sid in sids.Distinct())
+                foreach (var row in crows)                 // one row per stream (StationRows)
                 {
-                    var fr = First(sid)!;
+                    uint sid = row.Sid;
+                    var fr = FirstOf(row)!;
                     var (artist, title) = SongTitle(fr);
                     if (cat is "music" or "music_night" && fr.Streamed)
                     {
@@ -343,7 +362,8 @@ public static class GameIndex
                 {
                     var tv = cfg.Obj(t);
                     if (tv == null || tv.Length < 16) continue;
-                    if (cfg.StreamOf(Bin.U32(tv, 12)) is { } hb) rows.Add(new Row(hb & Hash.Mask, name, label, cat));
+                    uint tr = Bin.U32(tv, 12);
+                    if (cfg.StreamOf(tr) is { } hb) rows.Add(new Row(hb & Hash.Mask, name, label, cat, cfg.DurationOf(tr)));
                 }
             }
         }
@@ -354,22 +374,61 @@ public static class GameIndex
 
     // ---- DJ lines (extract_stations.dj_lines)
 
-    sealed record DjRow(long Bank, uint Sid, string Name, string Station, string Context);
+    /// <summary>A DJ take; <paramref name="Song"/> is the station stream of the song a song line is for.</summary>
+    sealed record DjRow(long Bank, uint Sid, string Name, string Station, string Context, uint? Song);
+
+    /// <summary>A song title as context-name tokens (crack_hashes.norm): NFKD folded to ASCII,
+    /// lowercased, apostrophes dropped, &amp; → " and ", other runs → "_".</summary>
+    static string TitleToken(string s)
+    {
+        var a = new string(s.Normalize(System.Text.NormalizationForm.FormKD).Where(c => c < 128).ToArray()).ToLowerInvariant();
+        a = a.Replace("'", "").Replace("’", "").Replace("&", " and ");
+        return Regex.Replace(a, "[^a-z0-9]+", "_").Trim('_');
+    }
+
+    /// <summary>crack_hashes.title_forms: 'Don't Chart' → dont_chart, dontchart; also without a
+    /// (...) / [...] part or a feat. credit.</summary>
+    static IEnumerable<string> TitleForms(string title)
+    {
+        var t = Regex.Replace(title, @"\s*[\(\[][^\)\]]*[\)\]]", "");
+        var outp = new List<string>();
+        foreach (var x in new[] { title, t, Regex.Split(t, @"\s+(?:feat\.?|ft\.?)\s+", RegexOptions.IgnoreCase)[0] })
+        {
+            var n = TitleToken(x);
+            if (n.Length == 0) continue;
+            foreach (var f in new[] { n, n.Replace("_", "") }) if (!outp.Contains(f)) outp.Add(f);
+        }
+        return outp;
+    }
 
     /// <summary>Each DJ voice lists its contexts and take counts; take NN of context C is the stream
-    /// joaat("C_NN"). A voice belongs to the station whose songs its song lines cover (else the
-    /// station of its bank's other lines); its lines are the takes found in its most common bank.</summary>
-    static List<DjRow> DjLines(AudioConfig cfg, List<Row> rows, List<KeyValuePair<int, List<(uint ctx, int takes)>>> voices,
-                               Dictionary<string, uint> songIds, Dictionary<uint, List<long>> banksOf)
+    /// joaat("C_NN"). Song lines are dj_intro_/dj_outro_ plus the track's metadata ID, or else plus
+    /// the song's title (dj_intro_dont_chart for "Don't Chart"). A voice belongs to the station whose
+    /// songs its song lines cover (else the station of its bank's other lines); its lines are the
+    /// takes found in its most common bank.</summary>
+    static List<DjRow> DjLines(List<Row> rows, List<KeyValuePair<int, List<(uint ctx, int takes)>>> voices,
+                               Dictionary<string, uint> songIds, List<(string title, uint? sid)> titled,
+                               Dictionary<uint, List<long>> banksOf, Action<string> log)
     {
         var names = DjContexts.ToDictionary(c => Hash.Partial(c), c => c);
-        var songOfCtx = new Dictionary<uint, uint>();
+        var songOfCtx = new Dictionary<uint, List<uint>>();
         foreach (var (song, ssid) in songIds)
             foreach (var kind in new[] { "intro", "outro" })
             {
                 uint h = Hash.Partial($"dj_{kind}_{song}");
-                names[h] = $"dj_{kind}_{song}"; songOfCtx[h] = ssid;
+                names[h] = $"dj_{kind}_{song}"; songOfCtx[h] = new List<uint> { ssid };
             }
+        // songs whose lines are named after the title; only for contexts nothing else names
+        foreach (var (title, ssid) in titled)
+            foreach (var t in TitleForms(title))
+                foreach (var kind in new[] { "intro", "outro" })
+                {
+                    var n = $"dj_{kind}_{t}";
+                    uint h = Hash.Partial(n);
+                    if (!names.TryAdd(h, n) && names[h] != n) continue;
+                    var l = Get(songOfCtx, h);
+                    if (ssid is { } x && !l.Contains(x)) l.Add(x);   // songs sharing a title: settled by station below
+                }
         var stOf = new Dictionary<uint, List<string>>();
         foreach (var r in rows)
         {
@@ -382,8 +441,8 @@ public static class GameIndex
             var votes = new Counter<string>(); var bankVotes = new Counter<long>();
             foreach (var (h, c) in ctxs)
             {
-                if (songOfCtx.TryGetValue(h, out var ss) && stOf.TryGetValue(ss, out var sts))
-                    foreach (var s in sts) votes.Add(s);
+                if (songOfCtx.TryGetValue(h, out var cands))
+                    foreach (var s in cands.SelectMany(ss => stOf.GetValueOrDefault(ss) ?? new()).Distinct()) votes.Add(s);
                 for (int i = 1; i <= c; i++)
                     if (banksOf.TryGetValue(Hash.TakeId(h, i), out var bl)) foreach (var b in bl) bankVotes.Add(b);
             }
@@ -393,11 +452,14 @@ public static class GameIndex
             foreach (var (h, c) in ctxs)
             {
                 var ctx = names.GetValueOrDefault(h, $"ctx_{h:x8}");
+                var cands = songOfCtx.GetValueOrDefault(h) ?? new();
+                uint? songSid = cands.Where(ss => stOf.GetValueOrDefault(ss)?.Contains(station) == true).Select(ss => (uint?)ss).FirstOrDefault()
+                             ?? (cands.Count > 0 ? cands[0] : null);
                 for (int i = 1; i <= c; i++)
                 {
                     uint x = Hash.TakeId(h, i);
                     if (banksOf.TryGetValue(x, out var bl) && bl.Contains(bank))
-                        found.Add(new DjRow(bank, x, $"{ctx}_{i:00}", station, ctx));
+                        found.Add(new DjRow(bank, x, $"{ctx}_{i:00}", station, ctx, songSid));
                 }
             }
         }
@@ -406,8 +468,13 @@ public static class GameIndex
         foreach (var f in found) if (f.Station.Length > 0) byBank.Add((f.Bank, f.Station));
         var fill = new Dictionary<long, string>();
         foreach (var ((b, s), _) in byBank.MostCommon()) fill.TryAdd(b, s);
-        return found.Select(f => f.Station.Length > 0 ? f : f with { Station = fill.GetValueOrDefault(f.Bank, "") })
-                    .OrderBy(f => f.Station, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal).ToList();
+        var res = found.Select(f => f.Station.Length > 0 ? f : f with { Station = fill.GetValueOrDefault(f.Bank, "") })
+                       .OrderBy(f => f.Station, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.Ordinal).ToList();
+        int named = res.Count(f => !f.Context.StartsWith("ctx_")), forSong = res.Count(f => f.Song != null);
+        var titleCtx = res.Where(f => f.Song != null && !songIds.Keys.Any(k => f.Context == $"dj_intro_{k}" || f.Context == $"dj_outro_{k}"))
+                          .Select(f => f.Context).Distinct().Count();
+        log($"  {res.Count} DJ lines, {named} named, {forSong} for a song ({titleCtx} contexts named after the title)");
+        return res;
     }
 
     /// <summary>Python's collections.Counter: most common first, ties in insertion order.</summary>
@@ -424,10 +491,11 @@ public static class GameIndex
 
     sealed class Extract(AudioConfig cfg, Curves curves)
     {
-        static readonly Dictionary<uint, string> Speech = new[] { "intro", "outro", "to", "weather", "time_of_day", "general" }
-            .ToDictionary(x => Hash.Joaat("dj_speech_category_" + x), x => x)
-            .Concat(new Dictionary<uint, string> { [0x14398f13] = "song_intro", [0xa838719f] = "song_outro" })
-            .ToDictionary(kv => kv.Key, kv => kv.Value);
+        // rule keys: class 0x1d objects named dj_speech_category_<type>; intro/outro_track_specific
+        // (0x14398f13 / 0xa838719f, a line for this one song) were labelled song_intro / song_outro before
+        static readonly Dictionary<uint, string> Speech = new[] { "intro", "outro", "to", "weather", "time_of_day", "general",
+                                                                  "intro_track_specific", "outro_track_specific" }
+            .ToDictionary(x => Hash.Joaat("dj_speech_category_" + x), x => x);
 
         string CatName(uint n)
         {

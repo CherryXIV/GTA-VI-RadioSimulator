@@ -79,7 +79,8 @@ public sealed class Scheduler
     // news and weather reports have no station clips, so they are never chosen
     static bool IsKnownClipCategory(string cat) => cat is "advert" or "ident" or "news" or "weather" or "talk"
         or "talk_night" or "music_bed" or "showintro" or "showintro_night" or "showoutro" or "showoutro_night"
-        or "ident_night" or "identfromads" or "identfromnews" or "ident_to_ads";
+        or "ident_night" or "identfromads" or "identfromnews" or "ident_to_ads" or "identfromtalk"
+        or "dj_banter" or "dj_banter_night" or "dj_banter_story" or "dj_banter_welcome";
 
     string NextCategory()
     {
@@ -145,8 +146,9 @@ public sealed class Scheduler
         {
             case "intro": return (L("intro"), "DJ intro");
             case "outro": return (L("outro"), "DJ outro");
-            case "song_intro": return (song.Intros, "DJ intro for this song");
-            case "song_outro": return (song.Outros, "DJ outro for this song");
+            // dj_speech_category_intro/outro_track_specific ("song_intro" / "song_outro" in older exports)
+            case "intro_track_specific" or "song_intro": return (song.Intros, "DJ intro for this song");
+            case "outro_track_specific" or "song_outro": return (song.Outros, "DJ outro for this song");
             case "time_of_day": return (L("tod_" + Daypart()), $"DJ time of day ({Daypart()})");
             case "weather": return (L("weather_" + opt.Weather), $"DJ weather ({opt.Weather})");
             case "to":

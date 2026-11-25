@@ -155,7 +155,15 @@ public sealed class AudioConfig
     public uint RefHash(long n) => n >= 0 && n < GRef.Count ? GRef[(int)n].hash : 0;
 
     /// <summary>hash_b of the sound record that track-item reference n points to.</summary>
-    public uint? StreamOf(uint n)
+    public uint? StreamOf(uint n) => Record(n) is var (p, at) ? Bin.U32(B, at) : null;
+
+    /// <summary>Length in seconds the sound record that track-item reference n points to gives its
+    /// stream: the u32 milliseconds just before the record's [0c 01], in both layouts (e.g. 0xBFDB
+    /// = 49.115 s for AfroBank's copy of dj_banter clip 02DE0C31, 0x33B2 = 13.234 s for Back Country's).</summary>
+    public double? DurationOf(uint n) => Record(n) is var (p, _) && p >= 6 ? Bin.U32(B, p - 6) / 1000.0 : null;
+
+    /// <summary>The sound record for track-item reference n: the position of its u32 id and of its hash_b.</summary>
+    (int p, int hashB)? Record(uint n)
     {
         if (n >= GRef.Count || GRef[(int)n].type != 2) return null;
         if (!soff.TryGetValue(GRef[(int)n].hash, out var o)) return null;
@@ -166,8 +174,8 @@ public sealed class AudioConfig
         {
             if (p < 2 || p + 17 > B.Length) continue;
             if (B[p - 2] != 0x0c || B[p - 1] != 0x01 || B[p + 4] != 0x0c) continue;
-            if (B[p + 5] == 0x00) return Bin.U32(B, p + 10);
-            if (B[p + 5] == 0x11 && B[p + 6] == 0x00 && B[p + 7] == 0x40 && B[p + 8] == 0x03) return Bin.U32(B, p + 13);
+            if (B[p + 5] == 0x00) return (p, p + 10);
+            if (B[p + 5] == 0x11 && B[p + 6] == 0x00 && B[p + 7] == 0x40 && B[p + 8] == 0x03) return (p, p + 13);
         }
         return null;
     }

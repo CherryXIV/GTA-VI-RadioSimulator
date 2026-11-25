@@ -34,7 +34,7 @@ public sealed class DjInfo
     [JsonPropertyName("outro_rules")] public List<DjRule> OutroRules { get; set; } = new();
 }
 
-/// <summary>One kind of DJ speech (intro, song_intro, time_of_day, weather, outro, song_outro, to)
+/// <summary>One kind of DJ speech (intro, intro_track_specific, time_of_day, weather, outro, outro_track_specific, to)
 /// and the conditions whose product is its weight.</summary>
 public sealed class DjRule
 {

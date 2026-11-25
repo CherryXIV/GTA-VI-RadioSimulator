@@ -48,7 +48,7 @@ There is no extraction step. On first run the program reads the station data str
 
 - **Audio config:** the zlib pages before the first sound bank in `audio.rpf`. They hold the stations, their categories, scheduling tables and DJ rules, and the speech table that lists every DJ line.
 - **Text tables:** the zlib pages in `data.rpf`. They hold the station names and song titles.
-- **Sound banks:** while a station plays, each clip is decoded from its AWC bank in `audio.rpf`. Opus is decoded in-process (Concentus) at each stream's real playback rate. ffmpeg isn't needed.
+- **Sound banks:** while a station plays, each clip is decoded from its AWC bank in `audio.rpf`. Opus is decoded in-process (Concentus) at each stream's real playback rate. ffmpeg isn't needed. Streamed banks reuse channel IDs, so one clip ID can be in many banks; the bank whose stream length matches the clip's sound record (within 0.05 s) is used.
 
 ## Building from source
 
@@ -87,15 +87,14 @@ RadioSim\bin\Release\net10.0\RadioSim.exe --help
 - **Idents** wait at least 5 minutes, and another song only gets weight after a run of 3. When nothing has weight, the station plays music.
 - **DJ windows.** The DJ talks inside each song's `intro_start`–`intro_end` / `outro_start`–`outro_end` markers.
 - **DJ rules.** Each station has an intro rule list and an outro rule list. Their keys are named `dj_speech_category_<type>`:
-  - intro list: `intro`, the song's own intro, `time_of_day`, `weather`;
-  - outro list: `outro`, `to`, `time_of_day`, the song's own outro, `weather`.
+  - intro list: `intro`, the song's own intro (`intro_track_specific`), `time_of_day`, `weather`;
+  - outro list: `outro`, `to`, `time_of_day`, the song's own outro (`outro_track_specific`), `weather`.
 
   Conditions: fixed weights; whether the previous or next category is X (`0x2d` / `0x2e`, e.g. no talk right after a talk segment, no generic outro before ads); a curve over the seconds since this speech type last played (`0x28`; time of day 0 until 500 s, rising to 1.5 by 20 min; weather 0 until 700 s); and the last speech type (`0x29`). At each window the DJ speaks with the station's speech chance (class `0x37`: 0.5, or 1.0 on Back Country, Gloriana Blues, Vice City FM, Emotion 98.3 and Leonida Jazz). Then one available type is drawn by weight.
-- **DJ lines** come from the speech voice table: each voice lists its contexts and take counts, and take NN of context C is the stream `joaat("C_NN")`. Contexts are stored as joaat without its final mixing step, so every take resolves without knowing its name. Named contexts: `dj_intro`, `dj_outro`, `dj_to_ads`, `dj_to_news`, `dj_to_night`, `dj_to_day`, `dj_weather_good`, `dj_weather_bad`, `dj_tod_morning`, `dj_tod_afternoon`, `dj_tod_evening`, and `dj_intro_<song>` / `dj_outro_<song>`. The rest stay `ctx_<hash>`.
+- **DJ lines** come from the speech voice table: each voice lists its contexts and take counts, and take NN of context C is the stream `joaat("C_NN")`. Contexts are stored as joaat without its final mixing step, so every take resolves without knowing its name. Named contexts: `dj_intro`, `dj_outro`, `dj_to_ads`, `dj_to_news`, `dj_to_night`, `dj_to_day`, `dj_weather_good`, `dj_weather_bad`, `dj_tod_morning`, `dj_tod_afternoon`, `dj_tod_evening`, and `dj_intro_<song>` / `dj_outro_<song>`, where `<song>` is the track's metadata ID or its title as a token (`dj_intro_dont_chart` for "Don't Chart"). The rest stay `ctx_<hash>`.
 
 ### Not decoded (our defaults)
 
-- Two rule-key names are not recovered. They are labelled `song_intro` / `song_outro` from their role.
 - Classes `0x34`/`0x35` are read as "the song has its own line" (they switch the generic lines off). That is inferred.
 - `0xc5` (Back Country) and `0x27` (Circoloco) count as 1.
 - Time of day uses `--hour` (default: now): morning 5–12, afternoon 12–17, evening 17–22, and no time-of-day lines at night. Weather uses `--weather good|bad`.
