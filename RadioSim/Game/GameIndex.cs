@@ -14,7 +14,23 @@ namespace RadioSim.Game;
 public static class GameIndex
 {
     /// <summary>Bump when the schedule format or how it is read changes, so old caches are rebuilt.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
+
+    /// <summary>Display names of hidden stations whose name string isn't keyed by their label. Kept
+    /// only when the text tables have that exact string.</summary>
+    static readonly Dictionary<string, string> HiddenNames = new()
+    {
+        ["hidden_radio_haitian_mixtape"] = "The Sniper of La Perle",
+    };
+
+    /// <summary>Stations whose own track list is a placeholder: the DJ mix that is their music
+    /// instead. The Vault Radio lists one Power Trip song; its music is the Vault DJ mix (stream
+    /// 09B3F224, 83 min, TRACKID markers 3201–3223), which the game's own playlists only list
+    /// under The Wipe.</summary>
+    static readonly Dictionary<string, uint> StationMix = new()
+    {
+        ["radio_the_vault"] = 0x09B3F224,
+    };
 
     public static readonly string[] CategoryNames =
     {
@@ -122,6 +138,7 @@ public static class GameIndex
         uint pIntro = Hash.Partial("dj_intro"), pOutro = Hash.Partial("dj_outro");
         var voices = cfg.VoiceTable().Where(v => v.Value.Any(c => c.ctx == pIntro || c.ctx == pOutro)).ToList();
         var needed = new HashSet<uint>(stationSids);
+        needed.UnionWith(StationMix.Values);
         foreach (var (_, ctxs) in voices)
             foreach (var (h, c) in ctxs)
                 for (int i = 1; i <= c; i++) needed.Add(Hash.TakeId(h, i));
@@ -176,10 +193,14 @@ public static class GameIndex
         }
         uint evTrack = Hash.Joaat("trackid"), evDj = Hash.Joaat("dj");
         // the TRACKID marker numbers of a streamed song (one for a normal song)
-        List<int> TrackIds(StreamInfo fr) => fr.Streamed
-            ? Events(fr.Bank).Where(e => e.type == evTrack).Select(e => Bin.F32(e.param)).Where(x => x > 0 && x < 1e6)
-                             .Select(x => (int)x).Distinct().ToList()
-            : new List<int>();
+        List<int> TrackIds(StreamInfo fr) => TrackMarks(fr).Select(m => m.id).Distinct().ToList();
+        // the TRACKID markers in play order, with their position in seconds
+        List<(int id, double at)> TrackMarks(StreamInfo fr) => fr.Streamed
+            ? Events(fr.Bank).Where(e => e.type == evTrack).Select(e => (x: Bin.F32(e.param), e.sample))
+                             .Where(m => m.x > 0 && m.x < 1e6)
+                             .Select(m => ((int)m.x, Math.Round(m.sample / (double)(fr.Rate > 0 ? fr.Rate : 48000), 3)))
+                             .OrderBy(m => m.Item2).ToList()
+            : new List<(int, double)>();
         int picked = rows.Count(r => FirstOf(r) is { } fi && First(r.Sid) is { } f0 && fi.Bank != f0.Bank);
         log($"  {picked} station clips whose ID is in several banks matched to their bank by length");
 
@@ -230,6 +251,31 @@ public static class GameIndex
             return metaTitle.TryGetValue(fr.Id, out var mt) ? mt : s is { } s2 ? (s2.Item1, "") : ("", "");
         }
 
+        // a song stream; one carrying markers for several tracks is a DJ mix and lists them
+        Song MakeSong(uint sid, StreamInfo fr, string cat, string artist, string title)
+        {
+            var w = new Dictionary<string, double>();
+            foreach (var e in Events(fr.Bank))
+                if (e.type == evDj && djMarkers.TryGetValue(e.param, out var mk))
+                    w[mk] = Math.Round(e.sample / (double)(fr.Rate > 0 ? fr.Rate : 48000), 3);
+            var song = new Song
+            {
+                Stream = $"{sid:X8}", Src = fr.Ref, Category = cat, Artist = artist, Title = title,
+                Duration = fr.Duration, Dj = w,
+            };
+            var marks = TrackMarks(fr);
+            if (marks.Select(m => m.id).Distinct().Count() < 2) return song;
+            song.Tracks = new();
+            foreach (var (id, at) in marks)
+            {
+                if (song.Tracks.Count > 0 && marks.Any(m => m.id == id && m.at < at)) continue;   // a song's second marker
+                var (a, t) = text.Songs.TryGetValue(id, out var s) ? s : ("", "");
+                song.Tracks.Add(new MixTrack { At = at, Artist = a, Title = t.Length > 0 || a.Length > 0 ? t : $"Track {id}" });
+            }
+            if (artist.Length == 0 && title.Length == 0) song.Title = $"DJ mix ({song.Tracks.Count} songs)";
+            return song;
+        }
+
         // ---- stations
         log("Building the station schedules…");
         var clips = new Dictionary<string, Dictionary<string, List<Row>>>();
@@ -255,17 +301,11 @@ public static class GameIndex
                     var (artist, title) = SongTitle(fr);
                     if (cat is "music" or "music_night" && fr.Streamed)
                     {
-                        var w = new Dictionary<string, double>();
-                        foreach (var e in Events(fr.Bank))
-                            if (e.type == evDj && djMarkers.TryGetValue(e.param, out var mk))
-                                w[mk] = Math.Round(e.sample / (double)(fr.Rate > 0 ? fr.Rate : 48000), 3);
+                        var song = MakeSong(sid, fr, cat, artist, title);
                         var ds = djSong.GetValueOrDefault(name)?.GetValueOrDefault(sid);
-                        st.Songs.Add(new Song
-                        {
-                            Stream = $"{sid:X8}", Src = fr.Ref, Category = cat, Artist = artist, Title = title,
-                            Duration = fr.Duration, Dj = w,
-                            Intros = ds?.GetValueOrDefault("intro") ?? new(), Outros = ds?.GetValueOrDefault("outro") ?? new(),
-                        });
+                        song.Intros = ds?.GetValueOrDefault("intro") ?? new();
+                        song.Outros = ds?.GetValueOrDefault("outro") ?? new();
+                        st.Songs.Add(song);
                     }
                     else
                         files.Add(new Clip
@@ -275,6 +315,11 @@ public static class GameIndex
                         });
                 }
                 if (files.Count > 0) st.Categories[cat] = files;
+            }
+            if (StationMix.TryGetValue(lrow.Label, out var mixSid) && First(mixSid) is { Streamed: true } mfr)
+            {
+                st.Songs.RemoveAll(s => s.Category == "music");
+                st.Songs.Add(MakeSong(mixSid, mfr, "music", "", ""));
             }
             st.Dj.Lines = djGen.GetValueOrDefault(name) ?? new();
             sched.Stations[name] = st;
@@ -330,6 +375,9 @@ public static class GameIndex
         return null;
     }
 
+    static bool HasString(List<TextTable> tables, string s) =>
+        tables.Any(t => Enumerable.Range(0, t.Strings.Count).Any(i => t.Strings.Clean(i) == s));
+
     static List<Row> StationRows(AudioConfig cfg, List<TextTable> text)
     {
         var packs = Regex.Matches(System.Text.Encoding.Latin1.GetString(cfg.B), @"Core\.RadioStation\.([a-z0-9_]+)")
@@ -343,14 +391,18 @@ public static class GameIndex
             var cands = new HashSet<string>();
             foreach (var p in packs)
                 foreach (var x in new[] { p, Regex.Replace(p, "_radio$", "") })
+                {
                     cands.Add("radio_" + Regex.Replace(x, "^radio_", ""));
+                    cands.Add("hidden_radio_" + Regex.Replace(x, "^radio_", ""));   // secret stations
+                }
             foreach (var t in text)
                 if (t.Entries.TryGetValue(key, out var i))
                     for (int j = i - 1; j <= i + 1; j++)
                         if (j >= 0 && j < t.Strings.Count) cands.Add("radio_" + Regex.Replace(Norm(t.Strings.Clean(j)), "^radio_", ""));
             var label = cands.FirstOrDefault(c => Hash.Joaat(c) == key);
             if (label == null) continue;
-            var name = DisplayName(label, text);
+            var name = DisplayName(label, text)
+                ?? (HiddenNames.TryGetValue(label, out var hn) && HasString(text, hn) ? hn : null);
             if (name == null) continue;
             foreach (var c in cfg.Categories(d))
             {

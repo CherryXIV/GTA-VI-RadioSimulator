@@ -272,7 +272,7 @@ public sealed class MainForm : Form
         foreach (var (name, s) in sched.Stations.OrderBy(k => k.Key))
         {
             var it = new ListViewItem(name) { Tag = name, ImageKey = name };
-            it.SubItems.Add(s.Songs.Count.ToString());
+            it.SubItems.Add(s.SongRows().Count.ToString());
             it.SubItems.Add((s.Categories.GetValueOrDefault("advert")?.Count ?? 0).ToString());
             stations.Items.Add(it);
         }
@@ -352,7 +352,7 @@ public sealed class MainForm : Form
         shown = p;
         var s = p.Segment;
         title.Text = Pretty(s);
-        kind.Text = $"{KindName(s.Category)}   ·   {Clock(s.Duration)}";
+        kind.Text = $"{KindName(s.Category)}   ·   {Clock(s.Duration)}" + (s.Part.Length > 0 ? $"   ·   {s.Part}" : "");
         voices.Text = s.Voices.Count == 0 ? "" : string.Join("     ", s.Voices.Select(v => $"🎙 {v.Label} at {Clock(v.At)}"));
         var tip = $"{playingStation}\n{Pretty(s)}";
         tray.Text = tip.Length > 127 ? tip[..127] : tip;
@@ -513,15 +513,17 @@ public sealed class MainForm : Form
         int total = 0;
         if (sched != null && SelectedStation is { } n && sched.Stations.TryGetValue(n, out var st))
         {
-            total = st.Songs.Count;
+            var rows = st.SongRows();
+            total = rows.Count;
             var f = songFilter.Text.Trim();
-            foreach (var x in st.Songs.OrderBy(x => x.Artist, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x.Title, StringComparer.CurrentCultureIgnoreCase))
+            foreach (var r in rows.OrderBy(x => x.Artist, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x.Title, StringComparer.CurrentCultureIgnoreCase))
             {
-                if (f.Length > 0 && !x.Name.Contains(f, StringComparison.CurrentCultureIgnoreCase)) continue;
-                var it = new ListViewItem(x.Artist.Length > 0 ? x.Artist : "—");
-                it.SubItems.Add(x.Title.Length > 0 ? x.Title : $"0x{x.Stream}");
-                it.SubItems.Add(Clock(x.Duration));
-                it.SubItems.Add((x.Intros.Count + x.Outros.Count).ToString());
+                var x = r.Song;
+                if (f.Length > 0 && !$"{r.Artist} - {r.Title}".Contains(f, StringComparison.CurrentCultureIgnoreCase)) continue;
+                var it = new ListViewItem(r.Artist.Length > 0 ? r.Artist : "—");
+                it.SubItems.Add(r.Title.Length > 0 ? r.Title : r.InMix ? "—" : $"0x{x.Stream}");
+                it.SubItems.Add(Clock(r.Duration));
+                it.SubItems.Add(r.InMix ? "in DJ mix" : (x.Intros.Count + x.Outros.Count).ToString());
                 if (x.Category == "music_night") it.ForeColor = Color.SlateBlue;
                 songs.Items.Add(it);
             }

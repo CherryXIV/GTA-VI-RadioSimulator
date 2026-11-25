@@ -31,7 +31,10 @@ song timestamps. The Seed box gives the same running order again; untick Shuffle
 
 Station logos are read from the game too (data\ttdb\ui\ttdb_ui.ttpf) and shown next to each
 station and in "Now playing". File > "Export station logos..." saves them as PNG files.
-The Vault has no logo in the game files.
+
+The two secret stations are included: The Sniper of La Perle and The Vault Radio. The Vault
+Radio is one long DJ mix; it plays song by song, so each song shows up in "Now playing", Up
+next, the notifications and a render's timestamps. La Perle has a 40-minute mixtape too.
 
 Keys (in the window):
   Space         play / pause

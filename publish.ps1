@@ -14,6 +14,7 @@ foreach ($proj in 'RadioSim.Gui', 'RadioSim') {
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 }
 Copy-Item (Join-Path $root 'RadioSim\README.txt') $out
+Copy-Item (Join-Path $root 'THIRD_PARTY_NOTICES.md') $out          # bcpack-rs and silicon-rans licenses
 $zip = Join-Path $dist 'GTA VI Radio Simulator.zip'
 Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zip -Force
 Write-Host "`nShare $zip ($([math]::Round((Get-Item $zip).Length / 1MB)) MB)"

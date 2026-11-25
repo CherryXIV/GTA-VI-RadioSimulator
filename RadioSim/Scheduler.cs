@@ -3,8 +3,11 @@ namespace RadioSim;
 /// <summary>DJ speech (a stream ref) mixed over a segment, starting <see cref="At"/> seconds in.</summary>
 public sealed record Voice(string Src, double At, string Label);
 
-/// <summary>One thing the station plays: a main file plus any DJ speech over it.</summary>
-public sealed record Segment(string Category, string Src, string Label, double Duration, List<Voice> Voices);
+/// <summary>One thing the station plays: a main file plus any DJ speech over it. A song of a DJ mix
+/// is the stretch of the mix's stream from <paramref name="Start"/> seconds, <paramref name="Duration"/>
+/// long; <paramref name="Part"/> then says which ("DJ mix, song 3 of 23").</summary>
+public sealed record Segment(string Category, string Src, string Label, double Duration, List<Voice> Voices,
+                             double Start = 0, string Part = "");
 
 public sealed class Options
 {
@@ -224,6 +227,20 @@ public sealed class Scheduler
                 song = opt.FullRotation ? FromBag(cat, pool) : Pick(pool, s => s.Stream, recentSongs, opt.NoRepeatFraction);
                 lastSong = song.Stream;
                 before = prev;
+                if (song.Tracks is { Count: > 0 } mix)
+                {
+                    // a DJ mix plays through, one segment per song in it (no DJ lines over a mix)
+                    Mark(cat, song.Duration);
+                    for (int i = 0; i < mix.Count; i++)
+                    {
+                        double a = i == 0 ? 0 : mix[i].At, b = i + 1 < mix.Count ? mix[i + 1].At : song.Duration;
+                        if (b - a <= 0) continue;
+                        yield return new Segment(cat, song.Src, mix[i].Name.Length > 0 ? mix[i].Name : song.Name, b - a,
+                                                 new List<Voice>(), a, $"{song.Name}, song {i + 1} of {mix.Count}");
+                    }
+                    song = null;
+                    continue;
+                }
                 pending = new Segment(cat, song.Src, song.Name, song.Duration, new List<Voice>());
                 var v = Speech(song, intro: true, before, null);
                 if (v != null) pending.Voices.Add(v);

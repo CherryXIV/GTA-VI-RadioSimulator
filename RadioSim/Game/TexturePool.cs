@@ -8,14 +8,21 @@ namespace RadioSim.Game;
 /// chunk table maps stored or zlib-compressed chunks into a virtual address space, plus an ETPF
 /// dictionary describing each texture (size, mips, DXGI format, Gfx10 tile mode, first page).
 /// A C# port of the extractor's gta6x.rds5 / gta6x.texture / gta6x.gfx10, for 2D textures only.
-/// Nothing is decrypted: chunks in the console's BCPack codecs are skipped.
+/// Nothing is decrypted. Chunks in the console's BCPack codec are decoded for BC7 (<see cref="BcPack"/>,
+/// a port of bcpack-rs); BCPack chunks of other formats are skipped.
 /// </summary>
 public sealed class TexturePool : IDisposable
 {
     public sealed record Texture(ulong Hash, int Width, int Height, int Mips, int Format, int TileMode,
                                  int Slices, int Dimension, long VirtualOffset);
 
-    record struct Chunk(long Source, int Packed, long Virtual, int Size, int Codec);
+    record struct Chunk(long Source, int Packed, long Virtual, int Size, int Codec, int Pad);
+
+    /// <summary>The chunk codec of BCPack BC7 (bcpack-rs: <c>(a &gt;&gt; 24) &amp; 0x3C</c> = 0x1C).</summary>
+    const int CodecBc7 = 7;
+
+    /// <summary>Decoded BCPack chunks, by chunk number.</summary>
+    readonly Dictionary<int, byte[]> unpacked = new();
 
     readonly FileStream fs;
     readonly Chunk[] chunks;
@@ -44,7 +51,7 @@ public sealed class TexturePool : IDisposable
             long start = (long)(v & 0x3FFFFFF) * 256, end = (long)(nx & 0x3FFFFFF) * 256;
             long virt = (long)(v >> 30 & 0x3FFFFF) * 4096, vend = (long)(nx >> 30 & 0x3FFFFF) * 4096;
             int pad = (int)(v >> 52), codec = (int)(v >> 26 & 0xF);
-            chunks[i] = new Chunk(start, (int)(end - start - pad), virt, (int)(vend - virt), codec);
+            chunks[i] = new Chunk(start, (int)(end - start - pad), virt, (int)(vend - virt), codec, pad);
         }
         starts = chunks.Select(c => c.Virtual).ToArray();
 
@@ -68,7 +75,7 @@ public sealed class TexturePool : IDisposable
     }
 
     /// <summary><paramref name="length"/> bytes of the virtual space, or null when part of it is
-    /// in a BCPack chunk or no chunk covers it.</summary>
+    /// in a chunk that can't be decoded (BCPack other than BC7) or no chunk covers it.</summary>
     public byte[]? ReadVirtual(long virt, int length)
     {
         var outp = new byte[length];
@@ -80,6 +87,14 @@ public sealed class TexturePool : IDisposable
             var c = chunks[i];
             long lo = Math.Max(virt, c.Virtual), hi = Math.Min(end, c.Virtual + c.Size);
             if (hi <= lo) continue;
+            if (c.Codec == CodecBc7)
+            {
+                var blocks = Unpacked(i);
+                if (blocks == null) return null;
+                blocks.AsSpan((int)(lo - c.Virtual), (int)(hi - lo)).CopyTo(outp.AsSpan((int)(lo - virt)));
+                covered += hi - lo;
+                continue;
+            }
             if (c.Codec is not (0 or 8)) return null;
             var raw = new byte[c.Packed];
             fs.Position = c.Source;
@@ -117,6 +132,20 @@ public sealed class TexturePool : IDisposable
                 if (at >= 0 && at + bb <= data.Length) data.AsSpan((int)at, bb).CopyTo(linear.AsSpan((y * bw + x) * bb));
             }
         return Bc.Decode(t.Format, linear, t.Width, t.Height);
+    }
+
+    /// <summary>A BCPack BC7 chunk, decoded (null when it doesn't decode).</summary>
+    byte[]? Unpacked(int i)
+    {
+        if (unpacked.TryGetValue(i, out var d)) return d;
+        var c = chunks[i];
+        var raw = new byte[c.Packed + c.Pad];                     // the decoder checks the pad is zeros
+        fs.Position = c.Source;
+        fs.ReadExactly(raw);
+        try { d = BcPack.DecodeBc7(raw, c.Size); }
+        catch (InvalidDataException) { d = null; }
+        unpacked[i] = d!;
+        return d;
     }
 
     public void Dispose() => fs.Dispose();

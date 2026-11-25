@@ -329,31 +329,55 @@ public sealed class AwcArchive : IDisposable
         return stereo && ns > total * 1.2 ? ns / 2 : ns;
     }
 
-    /// <summary>Decode one stream to interleaved stereo float PCM at 48 kHz. The game feeds raw samples
+    /// <summary>The last stream's packets: a DJ mix is decoded one song at a time, and its bank is
+    /// large (about 100 MB for an 83-minute mix), so it is read once.</summary>
+    sealed record PacketCache(long Bank, uint Id, List<byte[]> Pk, int Rate, long Frames);
+    volatile PacketCache? lastPackets;
+
+    /// <summary>Samples decoded before the wanted start of a range, so the Opus decoder has settled
+    /// (RFC 7845 recommends at least 80 ms of pre-roll).</summary>
+    const int PreRoll = 3840 * 2;
+
+    /// <summary>Decode one stream to interleaved stereo float PCM at 48 kHz: all of it, or
+    /// <paramref name="length"/> seconds from <paramref name="from"/>. The game feeds raw samples
     /// to the encoder, so a stream whose AWC rate is not 48000 is resampled from that rate.</summary>
-    public float[] Decode(long bank, uint id)
+    public float[] Decode(long bank, uint id, double from = 0, double? length = null)
     {
-        var (pk, rate, frames) = Packets(bank, id);
+        List<byte[]> pk; int rate; long frames;
+        if (lastPackets is { } lp && lp.Bank == bank && lp.Id == id) (pk, rate, frames) = (lp.Pk, lp.Rate, lp.Frames);
+        else
+        {
+            (pk, rate, frames) = Packets(bank, id);
+            lastPackets = length != null ? new PacketCache(bank, id, pk, rate, frames) : null;
+        }
         int nch = pk.Count > 0 && pk[0].Length > 0 && StereoToc(pk[0][0]) ? 2 : 1;
         var dec = OpusCodecFactory.CreateDecoder(48000, nch);
-        long total = pk.Sum(x => (long)OpusSamples(x));
-        var pcm = new float[(total + 5760) * 2];
-        long w = 0;
+        // the range in decoded samples (at the stream's own rate), PreSkip included
+        int srate = rate > 0 ? rate : 48000;
+        long avail0 = frames > 0 ? frames : long.MaxValue;
+        long first = PreSkip + (long)Math.Round(Math.Max(0, from) * srate);
+        long want = Math.Min(length is { } len ? (long)Math.Round(len * srate) : long.MaxValue, Math.Max(0, avail0 - (first - PreSkip)));
+        // start at the packet that holds (first - PreRoll)
+        int p0 = 0; long at = 0;
+        while (p0 < pk.Count && at + OpusSamples(pk[p0]) <= first - PreRoll) at += OpusSamples(pk[p0++]);
+        long cap = want == long.MaxValue ? pk.Skip(p0).Sum(x => (long)OpusSamples(x)) + 5760 : want;
+        var outp = new float[Math.Max(0, cap) * 2];
+        long w = 0;                                            // frames written to outp
         var tmp = new float[5760 * nch];
-        foreach (var p in pk)
+        for (int i = p0; i < pk.Count && w < cap; i++)
         {
             int n;
-            try { n = dec.Decode(p, tmp, 5760, false); }
-            catch (Exception) { n = Math.Min(5760, OpusSamples(p)); Array.Clear(tmp); }
-            if (w + n * 2 > pcm.Length) Array.Resize(ref pcm, (int)(w + n * 2));
-            if (nch == 2) Array.Copy(tmp, 0, pcm, w, n * 2);
-            else for (int i = 0; i < n; i++) pcm[w + 2 * i] = pcm[w + 2 * i + 1] = tmp[i] * 0.70710678f;   // centre, -3 dB (as ffmpeg upmixes)
-            w += n * 2;
+            try { n = dec.Decode(pk[i], tmp, 5760, false); }
+            catch (Exception) { n = Math.Min(5760, OpusSamples(pk[i])); Array.Clear(tmp); }
+            long skip = Math.Clamp(first - at, 0, n);          // samples of this packet before the range
+            at += n;
+            for (long k = skip; k < n && w < cap; k++, w++)
+            {
+                if (nch == 2) { outp[2 * w] = tmp[2 * k]; outp[2 * w + 1] = tmp[2 * k + 1]; }
+                else outp[2 * w] = outp[2 * w + 1] = tmp[k] * 0.70710678f;   // centre, -3 dB (as ffmpeg upmixes)
+            }
         }
-        long avail = Math.Max(0, w / 2 - PreSkip);
-        long keep = Math.Min(frames > 0 ? frames : avail, avail);
-        var outp = new float[keep * 2];
-        Array.Copy(pcm, PreSkip * 2, outp, 0, keep * 2);
+        if (w * 2 < outp.Length) Array.Resize(ref outp, (int)(w * 2));
         return rate is > 0 and not 48000 ? Resample(outp, rate, 48000) : outp;
     }
 

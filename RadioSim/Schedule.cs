@@ -23,6 +23,22 @@ public sealed class Station
     [JsonPropertyName("transitions")] public Dictionary<string, List<Option>> Transitions { get; set; } = new();
     [JsonPropertyName("categories")] public Dictionary<string, List<Clip>> Categories { get; set; } = new();
     [JsonPropertyName("songs")] public List<Song> Songs { get; set; } = new();
+
+    /// <summary>The station's songs for listing: its own songs, then the songs of its DJ mixes that
+    /// it doesn't also have on their own (with the length of their stretch of the mix).</summary>
+    public List<(string Artist, string Title, double Duration, Song Song, bool InMix)> SongRows()
+    {
+        var rows = Songs.Where(s => s.Tracks == null).Select(s => (s.Artist, s.Title, s.Duration, s, false)).ToList();
+        var have = rows.Select(r => r.s.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var mix in Songs.Where(s => s.Tracks != null))
+            for (int i = 0; i < mix.Tracks!.Count; i++)
+            {
+                var t = mix.Tracks[i];
+                double end = i + 1 < mix.Tracks.Count ? mix.Tracks[i + 1].At : mix.Duration;
+                if (have.Add(t.Name)) rows.Add((t.Artist, t.Title, end - (i == 0 ? 0 : t.At), mix, true));
+            }
+        return rows;
+    }
 }
 
 public sealed class DjInfo
@@ -76,8 +92,22 @@ public sealed class Song
     /// <summary>DJ lines for this song (stream refs, like <see cref="Src"/>).</summary>
     [JsonPropertyName("intros")] public List<string> Intros { get; set; } = new();
     [JsonPropertyName("outros")] public List<string> Outros { get; set; } = new();
+    /// <summary>For a DJ mix (one stream carrying several TRACKID markers): the songs in it and where
+    /// each starts. Null for an ordinary song.</summary>
+    [JsonPropertyName("tracks")] public List<MixTrack>? Tracks { get; set; }
 
-    public string Name => Artist.Length > 0 || Title.Length > 0 ? $"{Artist} - {Title}" : $"0x{Stream}";
+    public string Name => Artist.Length > 0 && Title.Length > 0 ? $"{Artist} - {Title}"
+        : Artist.Length > 0 ? Artist : Title.Length > 0 ? Title : $"0x{Stream}";
+}
+
+/// <summary>One song inside a DJ mix: its start (seconds into the mix) and its name from the text tables.</summary>
+public sealed class MixTrack
+{
+    [JsonPropertyName("at")] public double At { get; set; }
+    [JsonPropertyName("artist")] public string Artist { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+
+    public string Name => Artist.Length > 0 && Title.Length > 0 ? $"{Artist} - {Title}" : Artist.Length > 0 ? Artist : Title;
 }
 
 public sealed class Option

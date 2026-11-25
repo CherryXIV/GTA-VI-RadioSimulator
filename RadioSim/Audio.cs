@@ -11,18 +11,20 @@ public sealed class GameAudio : IDisposable
 
     public GameAudio(string game) { awc = new Game.AwcArchive(Path.Combine(game, "audio.rpf")); }
 
-    public float[] Decode(string src)
+    /// <summary>A whole clip, or <paramref name="length"/> seconds of it from <paramref name="from"/>.</summary>
+    public float[] Decode(string src, double from = 0, double? length = null)
     {
         var parts = src.Split(':');
         if (parts.Length != 2) throw new InvalidDataException($"bad stream reference '{src}'");
-        return awc.Decode(Convert.ToInt64(parts[0], 16), Convert.ToUInt32(parts[1], 16));
+        return awc.Decode(Convert.ToInt64(parts[0], 16), Convert.ToUInt32(parts[1], 16), from, length);
     }
 
     /// <summary>A segment with its DJ lines mixed in. <paramref name="voiceSeconds"/>, when given,
     /// receives each DJ line's length.</summary>
     public float[] Render(Segment s, List<double>? voiceSeconds = null)
     {
-        var pcm = Decode(s.Src);
+        // a song of a DJ mix is its stretch of the mix
+        var pcm = s.Part.Length > 0 ? Decode(s.Src, s.Start, s.Duration) : Decode(s.Src);
         foreach (var v in s.Voices)
         {
             var vp = Decode(v.Src);

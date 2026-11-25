@@ -14,12 +14,23 @@ public static class StationLogos
 {
     public const string PoolPath = @"data\ttdb\ui\ttdb_ui.ttpf";
 
+    /// <summary>Bump when how logos are found changes, so cached "no logo" answers are redone.</summary>
+    const int Version = 3;
+
+    /// <summary>Logos whose texture name isn't known: the texture's name hash, by station label.
+    /// Found by comparing the pool's textures with the cover art (the name isn't radio_&lt;label&gt;).</summary>
+    static readonly Dictionary<string, ulong> KnownHashes = new()
+    {
+        ["hidden_radio_haitian_mixtape"] = 0x10A999EF905E45BE,   // The Sniper of La Perle
+        ["radio_the_vault"] = 0x718DC4E912037335,                // The Vault Radio (a BCPack BC7 texture)
+    };
+
     static string Slug(string s) => Regex.Replace(s.ToLowerInvariant(), "[^a-z0-9]+", "_").Trim('_');
 
     /// <summary>Texture names to try for one station, most likely first (export_logos.candidates).</summary>
     public static List<string> Candidates(string label, string station)
     {
-        var stems = new List<string> { label.StartsWith("radio_") ? label["radio_".Length..] : label, Slug(station) };
+        var stems = new List<string> { Regex.Replace(label, "^(hidden_)?radio_", ""), Slug(station) };
         var outp = new List<string>();
         foreach (var stem in stems)
         {
@@ -34,7 +45,7 @@ public static class StationLogos
     static string CacheDir(string game)
     {
         var f = new FileInfo(Path.Combine(game, PoolPath));
-        return Path.Combine(Settings.DataDir, "logos", $"{f.Length:X}-{f.LastWriteTimeUtc.Ticks:X}");
+        return Path.Combine(Settings.DataDir, "logos", $"v{Version}-{f.Length:X}-{f.LastWriteTimeUtc.Ticks:X}");
     }
 
     static string Safe(string s) => Regex.Replace(s, @"[<>:""/\\|?*\x00-\x1f]+", "_").Trim(' ', '.');
@@ -83,13 +94,15 @@ public static class StationLogos
     }
 
     /// <summary>The logo of one station as RGBA8, or null when no texture of its candidate names
-    /// is in the pool (The Vault has none) or it can't be decoded.</summary>
+    /// is in the pool or it can't be decoded.</summary>
     public static byte[]? Extract(TexturePool tp, string label, string station, out int w, out int h)
     {
         w = h = 0;
-        foreach (var c in Candidates(label, station))
+        var hashes = Candidates(label, station).Select(TexturePool.NameHash).ToList();
+        if (KnownHashes.TryGetValue(label, out var kh)) hashes.Add(kh);
+        foreach (var hash in hashes)
         {
-            if (!tp.Textures.TryGetValue(TexturePool.NameHash(c), out var t)) continue;
+            if (!tp.Textures.TryGetValue(hash, out var t)) continue;
             var rgba = tp.ReadRgba(t);
             if (rgba == null) continue;
             w = t.Width; h = t.Height;
