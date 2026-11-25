@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using RadioSim.Game;
 
 namespace RadioSim;
@@ -39,6 +40,19 @@ public sealed class MainForm : Form
     readonly System.Windows.Forms.Timer tick = new() { Interval = 50 };
     SplitContainer split = null!;
 
+    // station logos (from the game's UI textures), the station's song list, the tray icon
+    readonly ImageList logoList = new() { ColorDepth = ColorDepth.Depth32Bit };
+    readonly Dictionary<string, Image> logos = new();
+    readonly PictureBox logo = new() { SizeMode = PictureBoxSizeMode.Zoom, Width = 96, Height = 96, Margin = new Padding(0, 0, 12, 0) };
+    readonly ListView songs = MakeList(("Artist", 200), ("Title", 260), ("Length", 60), ("DJ lines", 70));
+    readonly TextBox songFilter = new() { PlaceholderText = "Filter songs…", Dock = DockStyle.Top };
+    readonly TabPage songsTab = new("Songs on this station");
+    readonly NotifyIcon tray = new() { Text = "GTA VI Radio Simulator" };
+    readonly ToolStripMenuItem mediaKeysItem = new("Use the keyboard's &media keys") { CheckOnClick = true };
+    readonly ToolStripMenuItem trayItem = new("Minimize to the notification &area") { CheckOnClick = true };
+    readonly ToolStripMenuItem notifyItem = new("Show a &notification for each song") { CheckOnClick = true };
+    readonly ToolStripMenuItem nowFileItem = new("Write \"now playing\" &files (for OBS etc.)") { CheckOnClick = true };
+
     static ListView MakeList(params (string, int)[] cols)
     {
         var l = new ListView { View = View.Details, FullRowSelect = true, Dock = DockStyle.Fill, HeaderStyle = ColumnHeaderStyle.Nonclickable };
@@ -61,12 +75,15 @@ public sealed class MainForm : Form
 
         weather.Items.AddRange(new object[] { "good", "bad" }); weather.SelectedIndex = 0;
         djTalk.Items.AddRange(new object[] { "Station default", "Never", "Sometimes (25%)", "Half the time", "Often (75%)", "Always" });
-        djTalk.SelectedIndex = 0;
+        djTalk.SelectedIndex = Math.Clamp(settings.DjTalk, 0, djTalk.Items.Count - 1);
+        weather.SelectedItem = settings.Weather == "bad" ? "bad" : "good";
+        rotation.Checked = settings.Rotation;
+        volume.Value = Math.Clamp(settings.Volume, volume.Minimum, volume.Maximum);
         hour.Value = DateTime.Now.Hour;
         stations.Columns.Add("Station", 175); stations.Columns.Add("Songs", 55); stations.Columns.Add("Ads", 45);
 
         // ---- layout
-        var settings = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Padding = new Padding(0, 4, 0, 0) };
+        var options = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Padding = new Padding(0, 4, 0, 0) };
         void Add(Control c, string? label = null)
         {
             // each label stays on the same line as its control when the row wraps
@@ -74,7 +91,7 @@ public sealed class MainForm : Form
             if (label != null) pair.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(10, 7, 2, 0) });
             c.Margin = new Padding(2, 3, 4, 0);
             pair.Controls.Add(c);
-            settings.Controls.Add(pair);
+            options.Controls.Add(pair);
         }
         Add(seedBox, "Seed"); Add(shuffle); Add(hour, "Hour"); Add(weather, "Weather"); Add(djTalk, "DJ talk");
         Add(rotation);
@@ -90,20 +107,26 @@ public sealed class MainForm : Form
         now.Controls.Add(kind, 0, 2); now.SetColumnSpan(kind, 2);
         now.Controls.Add(voices, 0, 3); now.SetColumnSpan(voices, 2);
         now.Controls.Add(progress, 0, 4); now.Controls.Add(time, 1, 4);
+        var nowRow = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Padding = new Padding(8, 4, 0, 0) };
+        nowRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); nowRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        nowRow.Controls.Add(logo, 0, 0); nowRow.Controls.Add(now, 1, 0);
         var nowBox = new GroupBox { Text = "Now playing", Dock = DockStyle.Fill, AutoSize = true };
-        nowBox.Controls.Add(now);
+        nowBox.Controls.Add(nowRow);
 
         var lists = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 200 };
         var upBox = new GroupBox { Text = "Up next", Dock = DockStyle.Fill }; upBox.Controls.Add(upNext);
-        var hiBox = new GroupBox { Text = "History", Dock = DockStyle.Fill }; hiBox.Controls.Add(history);
-        lists.Panel1.Controls.Add(upBox); lists.Panel2.Controls.Add(hiBox);
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var hiTab = new TabPage("History"); hiTab.Controls.Add(history);
+        songsTab.Controls.Add(songs); songsTab.Controls.Add(songFilter);
+        tabs.TabPages.Add(hiTab); tabs.TabPages.Add(songsTab);
+        lists.Panel1.Controls.Add(upBox); lists.Panel2.Controls.Add(tabs);
 
         var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(6, 0, 6, 0) };
         right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        right.Controls.Add(settings, 0, 0); right.Controls.Add(transport, 0, 1);
+        right.Controls.Add(options, 0, 0); right.Controls.Add(transport, 0, 1);
         right.Controls.Add(nowBox, 0, 2); right.Controls.Add(lists, 0, 3);
 
         split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
@@ -114,8 +137,35 @@ public sealed class MainForm : Form
         var file = new ToolStripMenuItem("&File");
         file.DropDownItems.Add("&Choose game folder…", null, (_, _) => LoadGame(ask: true));
         file.DropDownItems.Add("&Read game files again", null, (_, _) => LoadGame(ask: false, rescan: true));
+        file.DropDownItems.Add("Export station &logos…", null, (_, _) => ExportLogos());
+        file.DropDownItems.Add("Open the \"now playing\" &folder", null, (_, _) => OpenNowPlayingFolder());
+        file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add("E&xit", null, (_, _) => Close());
         menu.Items.Add(file);
+        var radio = new ToolStripMenuItem("&Radio");
+        radio.DropDownItems.Add(new ToolStripMenuItem("&Play / pause", null, (_, _) => PlayPause()) { ShortcutKeyDisplayString = "Space" });
+        radio.DropDownItems.Add(new ToolStripMenuItem("&Skip", null, (_, _) => engine?.Skip()) { ShortcutKeyDisplayString = "Ctrl+Right" });
+        radio.DropDownItems.Add(new ToolStripMenuItem("&Next station", null, (_, _) => Tune(+1)) { ShortcutKeyDisplayString = "Page Down" });
+        radio.DropDownItems.Add(new ToolStripMenuItem("P&revious station", null, (_, _) => Tune(-1)) { ShortcutKeyDisplayString = "Page Up" });
+        radio.DropDownItems.Add(new ToolStripMenuItem("S&top", null, (_, _) => StopPlayback()));
+        menu.Items.Add(radio);
+        var opts = new ToolStripMenuItem("&Options");
+        opts.DropDownItems.AddRange(new ToolStripItem[] { mediaKeysItem, trayItem, notifyItem, nowFileItem });
+        menu.Items.Add(opts);
+        mediaKeysItem.Checked = settings.MediaKeys; trayItem.Checked = settings.MinimizeToTray;
+        notifyItem.Checked = settings.SongNotifications; nowFileItem.Checked = settings.NowPlayingFile;
+
+        var trayMenu = new ContextMenuStrip();
+        trayMenu.Items.Add("Play / pause", null, (_, _) => PlayPause());
+        trayMenu.Items.Add("Skip", null, (_, _) => engine?.Skip());
+        trayMenu.Items.Add("Next station", null, (_, _) => Tune(+1));
+        trayMenu.Items.Add("Previous station", null, (_, _) => Tune(-1));
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add("Show window", null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add("Exit", null, (_, _) => Close());
+        tray.ContextMenuStrip = trayMenu;
+        tray.Icon = Icon;
+        tray.Visible = true;
         var bar = new StatusStrip(); bar.Items.Add(status);
 
         Controls.Add(split); Controls.Add(menu); Controls.Add(bar);
@@ -130,7 +180,20 @@ public sealed class MainForm : Form
         skip.Click += (_, _) => engine?.Skip();
         stopBtn.Click += (_, _) => StopPlayback();
         render.Click += async (_, _) => await RenderWav();
-        volume.ValueChanged += (_, _) => engine?.SetVolume(volume.Value / 100.0);
+        volume.ValueChanged += (_, _) => { engine?.SetVolume(volume.Value / 100.0); if (!selfTest) settings.Volume = volume.Value; };
+        djTalk.SelectedIndexChanged += (_, _) => settings.DjTalk = djTalk.SelectedIndex;
+        weather.SelectedIndexChanged += (_, _) => settings.Weather = (string)weather.SelectedItem!;
+        rotation.CheckedChanged += (_, _) => settings.Rotation = rotation.Checked;
+        mediaKeysItem.CheckedChanged += (_, _) => { settings.MediaKeys = mediaKeysItem.Checked; settings.Save(); UpdateMediaKeys(); };
+        trayItem.CheckedChanged += (_, _) => { settings.MinimizeToTray = trayItem.Checked; settings.Save(); };
+        notifyItem.CheckedChanged += (_, _) => { settings.SongNotifications = notifyItem.Checked; settings.Save(); };
+        nowFileItem.CheckedChanged += (_, _) => { settings.NowPlayingFile = nowFileItem.Checked; settings.Save(); WriteNowPlaying(); };
+        stations.SelectedIndexChanged += (_, _) => ShowSongs();
+        songFilter.TextChanged += (_, _) => ShowSongs();
+        tray.DoubleClick += (_, _) => RestoreFromTray();
+        Resize += (_, _) => { if (WindowState == FormWindowState.Minimized && settings.MinimizeToTray) Hide(); };
+        KeyPreview = true;
+        KeyDown += OnKey;
         tick.Tick += (_, _) => UpdateProgress();
         Load += (_, _) =>
         {
@@ -139,11 +202,22 @@ public sealed class MainForm : Form
             for (int i = 0; i < w.Length; i++) stations.Columns[i].Width = (int)(w[i] * k);
             foreach (var l in new[] { upNext, history })
                 for (int i = 0; i < l.Columns.Count; i++) l.Columns[i].Width = (int)(new[] { 70, 90, 380, 300 }[i] * k);
+            for (int i = 0; i < songs.Columns.Count; i++) songs.Columns[i].Width = (int)(new[] { 200, 260, 60, 70 }[i] * k);
             split.SplitterDistance = (int)(310 * k);
+            logo.Width = logo.Height = (int)(96 * k);
+            logoList.ImageSize = new Size((int)(32 * k), (int)(32 * k));
+            stations.SmallImageList = logoList;
             foreach (var lab in new[] { station, title, kind, voices }) lab.UseMnemonic = false;   // keep '&' in names
             LoadGame(ask: false);
         };
-        FormClosing += (_, _) => { StopPlayback(); audio?.Dispose(); };
+        FormClosing += (_, _) =>
+        {
+            if (!selfTest) settings.Save();
+            StopPlayback(); audio?.Dispose();
+            tray.Visible = false; tray.Dispose();
+            UnregisterMediaKeys();
+            WriteNowPlaying(clear: true);
+        };
     }
 
     // ---- schedule / station list
@@ -194,15 +268,18 @@ public sealed class MainForm : Form
         finally { play.Enabled = render.Enabled = true; }
         audio?.Dispose();
         audio = new GameAudio(game);
+        await LoadLogos();
         foreach (var (name, s) in sched.Stations.OrderBy(k => k.Key))
         {
-            var it = new ListViewItem(name) { Tag = name };
+            var it = new ListViewItem(name) { Tag = name, ImageKey = name };
             it.SubItems.Add(s.Songs.Count.ToString());
             it.SubItems.Add((s.Categories.GetValueOrDefault("advert")?.Count ?? 0).ToString());
             stations.Items.Add(it);
         }
-        if (stations.Items.Count > 0) stations.Items[0].Selected = true;
-        status.Text = $"{sched.Stations.Count} stations from {game}";
+        var last = stations.Items.Cast<ListViewItem>().FirstOrDefault(i => (string)i.Tag! == settings.LastStation);
+        if (last != null) { last.Selected = true; last.EnsureVisible(); }
+        else if (stations.Items.Count > 0) stations.Items[0].Selected = true;
+        status.Text = $"{sched.Stations.Count} stations from {game}" + (logos.Count > 0 ? $", {logos.Count} logos" : "");
     }
 
     string? SelectedStation => stations.SelectedItems.Count > 0 ? (string)stations.SelectedItems[0].Tag! : null;
@@ -229,6 +306,8 @@ public sealed class MainForm : Form
         if (sched == null || audio == null || SelectedStation is not { } name) return;
         StopPlayback();
         playingStation = name;
+        if (!selfTest) { settings.LastStation = name; settings.Save(); }
+        logo.Image = logos.GetValueOrDefault(name);
         playingSeed = ChooseSeed();
         history.Items.Clear(); upNext.Items.Clear();
         engine = new RadioEngine(sched.Stations[name], playingSeed, CurrentOptions(), audio);
@@ -237,10 +316,18 @@ public sealed class MainForm : Form
         ShowQueue(engine.Upcoming);
         station.Text = $"{name}   ·   seed {playingSeed}";
         title.Text = "Tuning in…"; kind.Text = ""; voices.Text = "";
-        engine.Start();
+        try { engine.Start(); }
+        catch (InvalidOperationException e)                // no sound device: say so instead of crashing
+        {
+            StopPlayback();
+            upNext.Items.Clear();
+            title.Text = "No sound"; status.Text = e.Message;
+            return;
+        }
         tick.Start();
         pause.Enabled = skip.Enabled = stopBtn.Enabled = true; pause.Text = "❚❚  Pause";
         status.Text = $"Playing {name} (seed {playingSeed}). Same seed + settings = same running order.";
+        UpdateMediaKeys();
     }
 
     void StopPlayback()
@@ -252,6 +339,9 @@ public sealed class MainForm : Form
         if (playingStation != null) { title.Text = "Stopped"; kind.Text = ""; voices.Text = ""; }
         if (shown != null) AddRow(history, shown, insertTop: true);
         shown = null;
+        tray.Text = "GTA VI Radio Simulator";
+        WriteNowPlaying();
+        UpdateMediaKeys();
     }
 
     Planned? shown;
@@ -264,6 +354,11 @@ public sealed class MainForm : Form
         title.Text = Pretty(s);
         kind.Text = $"{KindName(s.Category)}   ·   {Clock(s.Duration)}";
         voices.Text = s.Voices.Count == 0 ? "" : string.Join("     ", s.Voices.Select(v => $"🎙 {v.Label} at {Clock(v.At)}"));
+        var tip = $"{playingStation}\n{Pretty(s)}";
+        tray.Text = tip.Length > 127 ? tip[..127] : tip;
+        if (settings.SongNotifications && s.Category is "music" or "music_night" && !selfTest)
+            tray.ShowBalloonTip(4000, playingStation ?? "", Pretty(s), ToolTipIcon.None);
+        WriteNowPlaying();
     }
 
     void ShowQueue(IReadOnlyList<Planned> q)
@@ -360,9 +455,190 @@ public sealed class MainForm : Form
             await Task.Delay(4000);
             status.Text += $"   [after skip: {title.Text}]";
             File.WriteAllText(Path.ChangeExtension(png, ".txt"),
-                $"{timing}\nstation={station.Text}\ntitle={title.Text}\nkind={kind.Text}\nvoices={voices.Text}\nupnext={upNext.Items.Count}\nhistory={history.Items.Count}\nstatus={status.Text}\n");
+                $"{timing}\nlogos={logos.Count} songs={songs.Items.Count} logo={(logo.Image != null ? "shown" : "none")}\nstation={station.Text}\ntitle={title.Text}\nkind={kind.Text}\nvoices={voices.Text}\nupnext={upNext.Items.Count}\nhistory={history.Items.Count}\nstatus={status.Text}\n");
             Close();
         };
+    }
+
+    // ---- station logos
+
+    /// <summary>Logos read from the game's UI texture pool (cached as PNGs after the first time).</summary>
+    async Task LoadLogos()
+    {
+        if (sched == null) return;
+        var sc = sched;
+        Dictionary<string, string> files;
+        try { files = await Task.Run(() => StationLogos.Load(sc, m => BeginInvoke(() => status.Text = m))); }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { files = new(); }
+        logoList.Images.Clear();
+        logo.Image = null;
+        foreach (var img in logos.Values) img.Dispose();
+        logos.Clear();
+        foreach (var (name, path) in files)
+        {
+            try
+            {
+                using var fs = File.OpenRead(path);
+                using var src = Image.FromStream(fs);
+                var img = new Bitmap(src);                     // a copy, so the file isn't kept open
+                logos[name] = img;
+                logoList.Images.Add(name, img);
+            }
+            catch (Exception e) when (e is IOException or ArgumentException) { }
+        }
+    }
+
+    void ExportLogos()
+    {
+        if (sched == null) return;
+        using var dlg = new FolderBrowserDialog { Description = "Save the station logos (PNG) to this folder", UseDescriptionForTitle = true };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var (n, miss) = StationLogos.Export(sched, dlg.SelectedPath);
+            status.Text = $"Wrote {n} station logos to {dlg.SelectedPath}" + (miss.Count > 0 ? $" (no logo: {string.Join(", ", miss)})" : "");
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, e.Message, "Could not export the logos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // ---- songs on the selected station
+
+    void ShowSongs()
+    {
+        songs.BeginUpdate();
+        songs.Items.Clear();
+        int total = 0;
+        if (sched != null && SelectedStation is { } n && sched.Stations.TryGetValue(n, out var st))
+        {
+            total = st.Songs.Count;
+            var f = songFilter.Text.Trim();
+            foreach (var x in st.Songs.OrderBy(x => x.Artist, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x.Title, StringComparer.CurrentCultureIgnoreCase))
+            {
+                if (f.Length > 0 && !x.Name.Contains(f, StringComparison.CurrentCultureIgnoreCase)) continue;
+                var it = new ListViewItem(x.Artist.Length > 0 ? x.Artist : "—");
+                it.SubItems.Add(x.Title.Length > 0 ? x.Title : $"0x{x.Stream}");
+                it.SubItems.Add(Clock(x.Duration));
+                it.SubItems.Add((x.Intros.Count + x.Outros.Count).ToString());
+                if (x.Category == "music_night") it.ForeColor = Color.SlateBlue;
+                songs.Items.Add(it);
+            }
+        }
+        songs.EndUpdate();
+        songsTab.Text = songs.Items.Count == total ? $"Songs on this station ({total})" : $"Songs on this station ({songs.Items.Count} of {total})";
+    }
+
+    // ---- keyboard, media keys, tray
+
+    void PlayPause()
+    {
+        if (engine == null) { Play(); return; }
+        engine.TogglePause();
+        pause.Text = engine.Paused ? "▶  Resume" : "❚❚  Pause";
+    }
+
+    /// <summary>Switch to the next (+1) or previous (-1) station in the list and play it, like
+    /// flicking through the radio in the game.</summary>
+    void Tune(int dir)
+    {
+        int n = stations.Items.Count;
+        if (n == 0) return;
+        int cur = playingStation is { } ps && engine != null
+            ? stations.Items.Cast<ListViewItem>().ToList().FindIndex(i => (string)i.Tag! == ps)
+            : stations.SelectedIndices.Count > 0 ? stations.SelectedIndices[0] : -1;
+        int next = cur < 0 ? (dir > 0 ? 0 : n - 1) : ((cur + dir) % n + n) % n;
+        foreach (ListViewItem it in stations.Items) it.Selected = it.Index == next;
+        stations.Items[next].EnsureVisible();
+        Play();
+    }
+
+    void OnKey(object? sender, KeyEventArgs e)
+    {
+        if (ActiveControl is TextBoxBase or NumericUpDown or ComboBox) return;
+        switch (e.KeyCode)
+        {
+            case Keys.Space: PlayPause(); break;
+            case Keys.Right when e.Control: engine?.Skip(); break;
+            case Keys.PageDown: Tune(+1); break;
+            case Keys.PageUp: Tune(-1); break;
+            default: return;
+        }
+        e.Handled = e.SuppressKeyPress = true;
+    }
+
+    void RestoreFromTray()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+    }
+
+    const int WmHotkey = 0x0312;
+    static readonly (int id, uint vk)[] MediaKeys = { (1, 0xB3), (2, 0xB0), (3, 0xB2) };   // play/pause, next track, stop
+    bool mediaRegistered;
+
+    [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint modifiers, uint vk);
+    [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    /// <summary>While a station is on (playing or paused), the media keys control it, even with
+    /// the window in the background; when stopped they go back to other programs. A key another
+    /// program already holds stays with it.</summary>
+    void UpdateMediaKeys()
+    {
+        UnregisterMediaKeys();
+        if (!settings.MediaKeys || !IsHandleCreated || engine == null) return;
+        int ok = MediaKeys.Count(k => RegisterHotKey(Handle, k.id, 0x4000 /* MOD_NOREPEAT */, k.vk));
+        mediaRegistered = true;
+        if (ok < MediaKeys.Length) status.Text = "Some media keys are in use by another program; they stay with it.";
+    }
+
+    void UnregisterMediaKeys()
+    {
+        if (!mediaRegistered || !IsHandleCreated) return;
+        foreach (var (id, _) in MediaKeys) UnregisterHotKey(Handle, id);
+        mediaRegistered = false;
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmHotkey)
+            switch ((int)m.WParam)
+            {
+                case 1: PlayPause(); return;
+                case 2: engine?.Skip(); return;
+                case 3: StopPlayback(); return;
+            }
+        base.WndProc(ref m);
+    }
+
+    // ---- "now playing" files for stream overlays
+
+    static string NowPlayingDir => Path.Combine(Settings.DataDir, "Now playing");
+
+    /// <summary>With the option on, keeps Data\Now playing\ up to date: song.txt (what is playing),
+    /// station.txt and station.png (its logo), for a text or image source in OBS and the like.</summary>
+    void WriteNowPlaying(bool clear = false)
+    {
+        if (!settings.NowPlayingFile) return;
+        try
+        {
+            Directory.CreateDirectory(NowPlayingDir);
+            bool on = !clear && engine != null && playingStation != null;
+            File.WriteAllText(Path.Combine(NowPlayingDir, "song.txt"), on && shown != null ? Pretty(shown.Segment) : "");
+            File.WriteAllText(Path.Combine(NowPlayingDir, "station.txt"), on ? playingStation : "");
+            var png = Path.Combine(NowPlayingDir, "station.png");
+            if (on && logos.TryGetValue(playingStation!, out var img)) img.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+            else if (File.Exists(png)) File.Delete(png);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ExternalException) { }
+    }
+
+    void OpenNowPlayingFolder()
+    {
+        Directory.CreateDirectory(NowPlayingDir);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(NowPlayingDir) { UseShellExecute = true });
     }
 
     // ---- formatting

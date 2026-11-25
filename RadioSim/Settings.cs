@@ -7,6 +7,17 @@ public sealed class Settings
 {
     public string? GameFolder { get; set; }
 
+    // the window's choices, restored on the next start (the command line ignores them)
+    public string? LastStation { get; set; }
+    public int Volume { get; set; } = 80;
+    public int DjTalk { get; set; }
+    public string Weather { get; set; } = "good";
+    public bool Rotation { get; set; }
+    public bool MediaKeys { get; set; } = true;
+    public bool MinimizeToTray { get; set; }
+    public bool SongNotifications { get; set; }
+    public bool NowPlayingFile { get; set; }
+
     static string? dataDir;
 
     /// <summary>The "Data" folder next to the program, where the settings and the station data read
@@ -41,5 +52,9 @@ public sealed class Settings
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return new(); }
     }
 
-    public void Save() => File.WriteAllText(PathOf, JsonSerializer.Serialize(this));
+    public void Save()
+    {
+        try { File.WriteAllText(PathOf, JsonSerializer.Serialize(this)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }   // only a preference: keep going
+    }
 }

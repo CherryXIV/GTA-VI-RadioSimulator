@@ -174,7 +174,9 @@ public sealed unsafe class WaveOutPlayer : IDisposable
             nBlockAlign = 8, nAvgBytesPerSec = GameAudio.Rate * 8,
         };
         int r = waveOutOpen(out handle, -1, ref fmt, IntPtr.Zero, IntPtr.Zero, 0);
-        if (r != 0) throw new InvalidOperationException($"waveOutOpen failed ({r})");
+        if (r != 0) throw new InvalidOperationException(r == 2
+            ? "No sound output device was found. Connect or enable speakers or headphones, then press Play again."
+            : $"The sound device could not be opened (waveOutOpen error {r}).");
         for (int i = 0; i < Buffers; i++)
         {
             mem[i] = Marshal.AllocHGlobal(Chunk * 4);
