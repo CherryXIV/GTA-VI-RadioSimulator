@@ -48,13 +48,13 @@ public sealed class Settings
 
     public static Settings Load()
     {
-        try { return JsonSerializer.Deserialize<Settings>(File.ReadAllText(PathOf)) ?? new(); }
+        try { return JsonSerializer.Deserialize(File.ReadAllText(PathOf), JsonContext.Default.Settings) ?? new(); }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return new(); }
     }
 
     public void Save()
     {
-        try { File.WriteAllText(PathOf, JsonSerializer.Serialize(this)); }
+        try { File.WriteAllText(PathOf, JsonSerializer.Serialize(this, JsonContext.Default.Settings)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }   // only a preference: keep going
     }
 }

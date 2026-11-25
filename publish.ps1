@@ -1,14 +1,14 @@
 # Builds the program for sharing: dist\GTA VI Radio Simulator\ and dist\GTA VI Radio Simulator.zip.
-# Self-contained (people don't need .NET installed). Contains no game data or audio: the app reads
-# everything from each user's own game files.
+# Framework-dependent: people need the .NET 10 Desktop Runtime (x64) installed, which keeps each
+# exe to about a megabyte (bundling the runtime made the zip 75 MB). Contains no game data or
+# audio: the app reads everything from each user's own game files.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $dist = Join-Path $root 'dist'
 $out = Join-Path $dist 'GTA VI Radio Simulator'
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }
-$opts = @('-c', 'Release', '-r', 'win-x64', '--self-contained',
-          '-p:PublishSingleFile=true', '-p:EnableCompressionInSingleFile=true',
-          '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=none', '-o', $out)
+$opts = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'false',
+          '-p:PublishSingleFile=true', '-p:DebugType=none', '-o', $out)
 foreach ($proj in 'RadioSim.Gui', 'RadioSim') {
     dotnet publish (Join-Path $root $proj) @opts
     if ($LASTEXITCODE) { exit $LASTEXITCODE }

@@ -69,7 +69,7 @@ public static class GameIndex
         {
             try
             {
-                var s = JsonSerializer.Deserialize<ScheduleFile>(File.ReadAllText(cache));
+                var s = JsonSerializer.Deserialize(File.ReadAllText(cache), JsonContext.Default.ScheduleFile);
                 if (s != null && s.Version == Version && s.Stations.Count > 0) { s.Game = game; return s; }
             }
             catch (JsonException) { }
@@ -83,8 +83,7 @@ public static class GameIndex
 
     public static void Save(ScheduleFile s, string path)
     {
-        var o = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
-        File.WriteAllText(path, JsonSerializer.Serialize(s, o));
+        File.WriteAllText(path, JsonSerializer.Serialize(s, JsonContext.Default.ScheduleFile));
     }
 
     /// <summary>A station clip; <paramref name="Duration"/> is the length its sound record gives (seconds), when known.</summary>

@@ -10,7 +10,9 @@ it plays. Nothing in the game folder is changed.
 
 What you need
 -------------
-- Windows 10 or 11 (64-bit). Nothing else to install.
+- Windows 10 or 11 (64-bit).
+- The .NET 10 Desktop Runtime (x64): https://dotnet.microsoft.com/download/dotnet/10.0
+  If it isn't installed, the program says so when you start it and offers the download.
 - The game's files: the folder that holds audio.rpf and data.rpf. (Made for the Xbox Series
   build's files; other builds are untested.)
 

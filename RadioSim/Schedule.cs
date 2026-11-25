@@ -5,6 +5,13 @@ namespace RadioSim;
 
 // ---- the radio schedule, built from the game files by Game.GameIndex -------------------------
 
+/// <summary>JSON for the station-data cache and the settings, generated at compile time (no
+/// reflection at run time, so it also works if the programs are ever published trimmed).</summary>
+[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(ScheduleFile))]
+[JsonSerializable(typeof(Settings))]
+internal partial class JsonContext : JsonSerializerContext { }
+
 public sealed class ScheduleFile
 {
     [JsonPropertyName("version")] public int Version { get; set; }

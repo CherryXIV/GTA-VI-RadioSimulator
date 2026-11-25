@@ -8,12 +8,13 @@ It comes with **no music and no game data**. It reads everything from your own c
 
 ## Download and play
 
-1. Download `GTA VI Radio Simulator.zip` from the [latest release](https://github.com/CherryXIV/GTA-VI-RadioSimulator/releases/latest) and unzip it anywhere you can write to (not Program Files).
-2. Run `GTA VI Radio Simulator.exe`. The app isn't signed, so Windows may say "Windows protected your PC". Click **More info**, then **Run anyway**.
-3. The first time, choose your game folder: the one that holds `audio.rpf` and `data.rpf`, or the folder just above it.
-4. It reads the station data from the game files. This takes a few seconds, or longer on a hard drive. Then double-click a station.
+1. Install the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (x64) if you don't have it. If it's missing, the program says so when you start it and offers the download.
+2. Download `GTA VI Radio Simulator.zip` from the [latest release](https://github.com/CherryXIV/GTA-VI-RadioSimulator/releases/latest) and unzip it anywhere you can write to (not Program Files).
+3. Run `GTA VI Radio Simulator.exe`. The app isn't signed, so Windows may say "Windows protected your PC". Click **More info**, then **Run anyway**.
+4. The first time, choose your game folder: the one that holds `audio.rpf` and `data.rpf`, or the folder just above it.
+5. It reads the station data from the game files. This takes a few seconds, or longer on a hard drive. Then double-click a station.
 
-**What you need:** Windows 10 or 11 (64-bit) and the game's files. Nothing else to install. It's made for the Xbox Series build's files; other builds are untested.
+**What you need:** Windows 10 or 11 (64-bit), the .NET 10 Desktop Runtime (x64), and the game's files. It's made for the Xbox Series build's files; other builds are untested.
 
 **After a game update:** nothing to do. The program notices that the game files changed and reads them again on the next start. **File → Read game files again** does it on demand.
 
@@ -68,7 +69,7 @@ dotnet build RadioSim.slnx -c Release
 RadioSim\bin\Release\net10.0\RadioSim.exe --help
 ```
 
-`.\publish.ps1` builds `dist\GTA VI Radio Simulator.zip`, the release download. It holds both exes, self-contained so users need no .NET install, `RadioSim/README.txt` as the user guide, and `THIRD_PARTY_NOTICES.md`.
+`.\publish.ps1` builds `dist\GTA VI Radio Simulator.zip`, the release download. It holds both exes (framework-dependent, about 1 MB each: users install the .NET 10 Desktop Runtime), `RadioSim/README.txt` as the user guide, and `THIRD_PARTY_NOTICES.md`.
 
 - **`RadioSim/`** is the engine and the command line. `Scheduler.cs` decides what plays next, and `Audio.cs` handles decoding, mixing and output.
 - **`RadioSim/Game/`** reads the game files:
